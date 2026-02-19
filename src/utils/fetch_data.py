@@ -34,18 +34,18 @@ async def fetch_data_async(url: str) -> Any:
                 )
                 response.raise_for_status()
                 return response.json()
-        except Exception as error:
+        except Exception as e:
             is_last_attempt = attempt == retries
 
-            if is_network_error(error) and not is_last_attempt:
+            if is_network_error(e) and not is_last_attempt:
                 delay = retry_delay * (2 ** (attempt - 1))  # Exponential backoff: 1s, 2s, 4s
                 print(f'\033[33m[WARNING]\033[0m Network error (attempt {attempt}/{retries}), retrying in {delay}s...')
                 await asyncio.sleep(delay)
                 continue
 
             # If it's the last attempt or not a network error, raise
-            if is_last_attempt and is_network_error(error):
-                print(f'\033[31m[ERROR]\033[0m Network timeout after {retries} attempts - {type(error).__name__}')
+            if is_last_attempt and is_network_error(e):
+                print(f'\033[31m[ERROR]\033[0m Network timeout after {retries} attempts - {type(e).__name__}')
             raise
 
 

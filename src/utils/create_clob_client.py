@@ -5,7 +5,7 @@ Note: Order submission (create_market_order, post_order) and API key creation
 (create_api_key, derive_api_key) are placeholders. For production you must
 implement and audit the full CLOB flow. See SECURITY.md and Polymarket CLOB docs.
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 from web3 import Web3
 from eth_account import Account
 from ..config.env import ENV
@@ -87,49 +87,70 @@ class ClobClient:
         return {'success': False, 'error': 'Not implemented - requires full CLOB client implementation'}
 
 
-async def create_clob_client() -> ClobClient:
-    """Create and initialize CLOB client"""
+async def _create_one_clob_client(
+    proxy_wallet: str,
+    private_key: str,
+    is_proxy_safe: Optional[bool] = None,
+) -> ClobClient:
+    """Create one CLOB client for a single (proxy_wallet, private_key).
+    If is_proxy_safe is provided, skip RPC check (avoids duplicate is_gnosis_safe call).
+    """
     chain_id = 137  # Polygon
     host = ENV.CLOB_HTTP_URL
-    
-    # Create wallet from private key
-    account = Account.from_key(ENV.PRIVATE_KEY)
-    
-    # Detect if the proxy wallet is a Gnosis Safe or EOA
-    is_proxy_safe = await is_gnosis_safe(ENV.PROXY_WALLET)
+    try:
+        account = Account.from_key(private_key)
+    except Exception as e:
+        error(f'Invalid PRIVATE_KEY for {proxy_wallet[:10]}...: {e}')
+        raise ValueError(f'Invalid private key for follow wallet {proxy_wallet[:10]}...') from e
+
+    if is_proxy_safe is None:
+        is_proxy_safe = await is_gnosis_safe(proxy_wallet)
     signature_type = 'POLY_GNOSIS_SAFE' if is_proxy_safe else 'EOA'
-    
-    info(
-        f'Wallet type detected: {"Gnosis Safe" if is_proxy_safe else "EOA (Externally Owned Account)"}'
-    )
-    
-    # Create initial client
+
     clob_client = ClobClient(
         host=host,
         chain_id=chain_id,
         wallet=account,
         signature_type=signature_type,
-        proxy_wallet=ENV.PROXY_WALLET if is_proxy_safe else None
+        proxy_wallet=proxy_wallet if is_proxy_safe else None
     )
-    
-    # Try to create or derive API key
     try:
         creds = await clob_client.create_api_key()
         if not creds.get('key'):
             creds = await clob_client.derive_api_key()
     except Exception as e:
-        error(f'Failed to create/derive API key: {e}')
+        error(f'Failed to create/derive API key for {proxy_wallet[:10]}...: {e}')
         creds = {}
-    
-    # Create client with credentials
-    clob_client = ClobClient(
+    return ClobClient(
         host=host,
         chain_id=chain_id,
         wallet=account,
         api_creds=creds,
         signature_type=signature_type,
-        proxy_wallet=ENV.PROXY_WALLET if is_proxy_safe else None
+        proxy_wallet=proxy_wallet if is_proxy_safe else None
     )
-    
-    return clob_client
+
+
+async def create_clob_clients() -> List[Tuple[str, ClobClient]]:
+    """Create one CLOB client per follow wallet. Returns list of (proxy_wallet, clob_client)."""
+    if not ENV.PROXY_WALLETS:
+        raise ValueError('No follow wallets configured (PROXY_WALLETS or PROXY_WALLET must be set)')
+    result: List[Tuple[str, ClobClient]] = []
+    for i, (proxy_wallet, private_key) in enumerate(zip(ENV.PROXY_WALLETS, ENV.PRIVATE_KEYS)):
+        is_safe = await is_gnosis_safe(proxy_wallet)
+        info(
+            f'Follow wallet {i + 1}/{len(ENV.PROXY_WALLETS)}: '
+            f'{"Gnosis Safe" if is_safe else "EOA"} ({proxy_wallet[:10]}...)'
+        )
+        client = await _create_one_clob_client(proxy_wallet, private_key, is_proxy_safe=is_safe)
+        result.append((proxy_wallet, client))
+    return result
+
+
+async def create_clob_client() -> ClobClient:
+    """Create single CLOB client (first follow wallet). For backward compatibility."""
+    clients = await create_clob_clients()
+    if not clients:
+        raise ValueError('No follow wallets configured')
+    return clients[0][1]
 

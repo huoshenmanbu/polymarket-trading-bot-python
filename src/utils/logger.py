@@ -152,12 +152,12 @@ def monitoring(trader_count: int) -> None:
     print(f'{Style.DIM}[{timestamp}]{Style.RESET_ALL} {Fore.CYAN}[INFO]{Style.RESET_ALL} Monitoring {Fore.YELLOW}{trader_count}{Style.RESET_ALL} trader(s)')
 
 
-def startup(traders: List[str], my_wallet: str) -> None:
-    """Print startup banner"""
+def startup(traders: List[str], my_wallet_or_wallets: Any) -> None:
+    """Print startup banner. my_wallet_or_wallets: single address str or list of follow addresses."""
     # Boxed banner with text
     title = "COPY TRADING BOT"
     tagline = "Copy the best, automate success"
-    
+
     border = '=' * 70
     banner = f"""
 {Fore.CYAN}{Style.BRIGHT}{border}{Style.RESET_ALL}
@@ -173,7 +173,16 @@ def startup(traders: List[str], my_wallet: str) -> None:
     print(f'{Fore.CYAN}{Style.BRIGHT}Tracking Traders:{Style.RESET_ALL}')
     for index, address in enumerate(traders, 1):
         print(f'  {index}. {Style.DIM}{address}{Style.RESET_ALL}')
-    print(f'\n{Fore.CYAN}{Style.BRIGHT}Your Wallet:{Style.RESET_ALL} {Style.DIM}{mask_address(my_wallet)}{Style.RESET_ALL}\n')
+    wallets = my_wallet_or_wallets if isinstance(my_wallet_or_wallets, list) else [my_wallet_or_wallets]
+    if len(wallets) <= 1:
+        print(f'\n{Fore.CYAN}{Style.BRIGHT}Your Wallet:{Style.RESET_ALL} {Style.DIM}{mask_address(wallets[0] if wallets else "")}{Style.RESET_ALL}\n')
+    else:
+        print(f'\n{Fore.CYAN}{Style.BRIGHT}Your Wallets:{Style.RESET_ALL} {len(wallets)} addresses')
+        for i, addr in enumerate(wallets[:5], 1):
+            print(f'  {i}. {Style.DIM}{mask_address(addr)}{Style.RESET_ALL}')
+        if len(wallets) > 5:
+            print(f'  ... and {len(wallets) - 5} more')
+        print()
 
 
 def db_connection(traders: List[str], counts: List[int]) -> None:

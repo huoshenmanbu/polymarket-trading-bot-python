@@ -1,9 +1,10 @@
 """
 Environment configuration and validation
 """
+import json
 import os
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from dotenv import load_dotenv
 from .copy_strategy import CopyStrategy, CopyStrategyConfig, parse_tiered_multipliers
 
@@ -16,19 +17,24 @@ def is_valid_ethereum_address(address: str) -> bool:
 
 
 def validate_required_env() -> None:
-    """Validate required environment variables"""
-    required = [
+    """Validate required environment variables.
+
+    Wallet config: either (PROXY_WALLET + PRIVATE_KEY) or (PROXY_WALLETS + PRIVATE_KEYS).
+    """
+    required_core = [
         'USER_ADDRESSES',
-        'PROXY_WALLET',
-        'PRIVATE_KEY',
         'CLOB_HTTP_URL',
         'CLOB_WS_URL',
         'MONGO_URI',
         'RPC_URL',
         'USDC_CONTRACT_ADDRESS',
     ]
+    missing = [key for key in required_core if not os.getenv(key)]
 
-    missing = [key for key in required if not os.getenv(key)]
+    has_single = bool(os.getenv('PROXY_WALLET') and os.getenv('PRIVATE_KEY'))
+    has_multi = bool(os.getenv('PROXY_WALLETS') and os.getenv('PRIVATE_KEYS'))
+    if not has_single and not has_multi:
+        missing.append('PROXY_WALLET+PRIVATE_KEY or PROXY_WALLETS+PRIVATE_KEYS')
 
     if missing:
         print('\n\033[31m[ERROR]\033[0m Configuration Error: Missing required environment variables\n')
@@ -40,19 +46,14 @@ def validate_required_env() -> None:
         raise ValueError(f'Missing required environment variables: {", ".join(missing)}')
 
 
-def validate_addresses() -> None:
-    """Validate Ethereum addresses"""
-    proxy_wallet = os.getenv('PROXY_WALLET')
-    if proxy_wallet and not is_valid_ethereum_address(proxy_wallet):
-        print('\n[ERROR] Invalid Wallet Address\n')
-        print(f'Your PROXY_WALLET: {proxy_wallet}')
-        print('Expected format:    0x followed by 40 hexadecimal characters\n')
-        print('Example: 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0\n')
-        print('Tips:')
-        print('   • Copy your wallet address from MetaMask')
-        print('   • Make sure it starts with 0x')
-        print('   • Should be exactly 42 characters long\n')
-        raise ValueError(f'Invalid PROXY_WALLET address format: {proxy_wallet}')
+def validate_addresses(proxy_wallets_list: List[str]) -> None:
+    """Validate Ethereum addresses (follow wallets already validated in parse; check USDC)."""
+    for i, addr in enumerate(proxy_wallets_list):
+        if not is_valid_ethereum_address(addr):
+            print('\n[ERROR] Invalid Follow Wallet Address\n')
+            print(f'Address at index {i}: {addr}')
+            print('Expected format: 0x followed by 40 hexadecimal characters\n')
+            raise ValueError(f'Invalid follow wallet address at index {i}: {addr}')
 
     usdc_contract = os.getenv('USDC_CONTRACT_ADDRESS')
     if usdc_contract and not is_valid_ethereum_address(usdc_contract):
@@ -142,7 +143,10 @@ def parse_user_addresses(input_str: str) -> List[str]:
             import json
             parsed = json.loads(trimmed)
             if isinstance(parsed, list):
-                addresses = [addr.lower().strip() for addr in parsed if addr.strip()]
+                addresses = [
+                    str(addr).lower().strip() for addr in parsed
+                    if addr is not None and str(addr).strip()
+                ]
                 # Validate each address
                 for addr in addresses:
                     if not is_valid_ethereum_address(addr):
@@ -173,6 +177,89 @@ def parse_user_addresses(input_str: str) -> List[str]:
                 raise ValueError(f'Invalid Ethereum address in USER_ADDRESSES: {addr}')
 
     return addresses
+
+
+def parse_proxy_wallets(input_str: str) -> List[str]:
+    """Parse PROXY_WALLETS: comma-separated or JSON array, same style as USER_ADDRESSES."""
+    trimmed = (input_str or '').strip()
+    if not trimmed:
+        return []
+
+    if trimmed.startswith('[') and trimmed.endswith(']'):
+        try:
+            parsed = json.loads(trimmed)
+            if isinstance(parsed, list):
+                addresses = [
+                    str(addr).lower().strip() for addr in parsed
+                    if addr is not None and str(addr).strip()
+                ]
+                for addr in addresses:
+                    if not is_valid_ethereum_address(addr):
+                        raise ValueError(f'Invalid Ethereum address in PROXY_WALLETS: {addr}')
+                return addresses
+        except json.JSONDecodeError as e:
+            raise ValueError(f'Invalid JSON format for PROXY_WALLETS: {e}')
+    addresses = [addr.lower().strip() for addr in trimmed.split(',') if addr.strip()]
+    for addr in addresses:
+        if not is_valid_ethereum_address(addr):
+            raise ValueError(f'Invalid Ethereum address in PROXY_WALLETS: {addr}')
+    return addresses
+
+
+def parse_private_keys(input_str: str) -> List[str]:
+    """Parse PRIVATE_KEYS: comma-separated list (order must match PROXY_WALLETS)."""
+    trimmed = (input_str or '').strip()
+    if not trimmed:
+        return []
+    return [k.strip() for k in trimmed.split(',') if k.strip()]
+
+
+def _is_valid_private_key(key: str) -> bool:
+    """Basic format check: 64 hex chars, optionally with 0x prefix (66 chars)."""
+    k = key.strip()
+    if len(k) == 66 and k.startswith('0x'):
+        k = k[2:]
+    return len(k) == 64 and all(c in '0123456789abcdefABCDEF' for c in k)
+
+
+def _build_follow_wallet_lists() -> Tuple[List[str], List[str]]:
+    """Build PROXY_WALLETS and PRIVATE_KEYS lists. Prefer PROXY_WALLETS/PRIVATE_KEYS if set."""
+    wallets_raw = (os.getenv('PROXY_WALLETS') or '').strip()
+    keys_raw = (os.getenv('PRIVATE_KEYS') or '').strip()
+
+    if wallets_raw:
+        wallets = parse_proxy_wallets(wallets_raw)
+        keys = parse_private_keys(keys_raw)
+        if len(wallets) < 1:
+            raise ValueError('PROXY_WALLETS must contain at least one address')
+        if len(wallets) != len(keys):
+            raise ValueError(
+                f'PROXY_WALLETS and PRIVATE_KEYS must have the same length (got {len(wallets)} vs {len(keys)})'
+            )
+        # Reject duplicate follow wallets to avoid confusion
+        seen = set()
+        for i, w in enumerate(wallets):
+            if w in seen:
+                raise ValueError(f'PROXY_WALLETS must not contain duplicate address at index {i}: {w[:10]}...')
+            seen.add(w)
+        # Basic private key format check for clearer errors
+        for i, k in enumerate(keys):
+            if not _is_valid_private_key(k):
+                raise ValueError(
+                    f'PRIVATE_KEYS at index {i}: invalid format (expected 64 hex chars, optional 0x prefix)'
+                )
+        return wallets, keys
+
+    # Single-wallet mode
+    w = (os.getenv('PROXY_WALLET') or '').strip().lower()
+    k = (os.getenv('PRIVATE_KEY') or '').strip()
+    if not w or not k:
+        raise ValueError('Missing PROXY_WALLET and PRIVATE_KEY (or use PROXY_WALLETS and PRIVATE_KEYS)')
+    if not is_valid_ethereum_address(w):
+        raise ValueError(f'Invalid PROXY_WALLET address format: {w}')
+    if not _is_valid_private_key(k):
+        raise ValueError('PRIVATE_KEY: invalid format (expected 64 hex chars, optional 0x prefix)')
+    return [w], [k]
 
 
 def parse_copy_strategy() -> CopyStrategyConfig:
@@ -253,9 +340,10 @@ def parse_copy_strategy() -> CopyStrategyConfig:
     return config
 
 
-# Run all validations
+# Run validations and build follow-wallet lists
 validate_required_env()
-validate_addresses()
+_PROXY_WALLETS_LIST, _PRIVATE_KEYS_LIST = _build_follow_wallet_lists()
+validate_addresses(_PROXY_WALLETS_LIST)
 validate_numeric_config()
 validate_urls()
 
@@ -263,8 +351,10 @@ validate_urls()
 class ENV:
     """Environment configuration"""
     USER_ADDRESSES: List[str] = parse_user_addresses(os.getenv('USER_ADDRESSES', ''))
-    PROXY_WALLET: str = os.getenv('PROXY_WALLET', '')
-    PRIVATE_KEY: str = os.getenv('PRIVATE_KEY', '')
+    PROXY_WALLETS: List[str] = _PROXY_WALLETS_LIST
+    PRIVATE_KEYS: List[str] = _PRIVATE_KEYS_LIST
+    PROXY_WALLET: str = (_PROXY_WALLETS_LIST[0] if _PROXY_WALLETS_LIST else '')
+    PRIVATE_KEY: str = (_PRIVATE_KEYS_LIST[0] if _PRIVATE_KEYS_LIST else '')
     CLOB_HTTP_URL: str = os.getenv('CLOB_HTTP_URL', '')
     CLOB_WS_URL: str = os.getenv('CLOB_WS_URL', '')
     FETCH_INTERVAL: int = int(os.getenv('FETCH_INTERVAL', '1'))
@@ -286,17 +376,28 @@ class ENV:
     USDC_CONTRACT_ADDRESS: str = os.getenv('USDC_CONTRACT_ADDRESS', '')
 
 
-def _validate_no_self_copy() -> None:
-    """Prevent copying from own wallet (PROXY_WALLET in USER_ADDRESSES)."""
-    if not ENV.PROXY_WALLET or not ENV.USER_ADDRESSES:
-        return
-    proxy_lower = ENV.PROXY_WALLET.lower().strip()
-    if proxy_lower in [a.lower() for a in ENV.USER_ADDRESSES]:
+def _validate_user_addresses_non_empty() -> None:
+    """Ensure at least one trader address is configured."""
+    if not ENV.USER_ADDRESSES:
         raise ValueError(
-            'PROXY_WALLET must not be in USER_ADDRESSES. '
-            'Remove your own wallet from the list of traders to copy.'
+            'USER_ADDRESSES must contain at least one trader address. '
+            'Check your .env (comma-separated or JSON array).'
         )
 
 
+def _validate_no_self_copy() -> None:
+    """Prevent copying from own wallet (no follow wallet may be in USER_ADDRESSES)."""
+    if not ENV.PROXY_WALLETS or not ENV.USER_ADDRESSES:
+        return
+    user_set = {a.lower() for a in ENV.USER_ADDRESSES}
+    for addr in ENV.PROXY_WALLETS:
+        if addr.lower() in user_set:
+            raise ValueError(
+                'Follow wallet (PROXY_WALLET / PROXY_WALLETS) must not be in USER_ADDRESSES. '
+                'Remove your own wallet from the list of traders to copy.'
+            )
+
+
+_validate_user_addresses_non_empty()
 _validate_no_self_copy()
 

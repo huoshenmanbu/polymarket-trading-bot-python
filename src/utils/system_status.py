@@ -77,11 +77,15 @@ async def check_system_status() -> Dict[str, Any]:
         }
         results['summary']['failed'] += 1
     
-    # Check wallet balance
+    # Check wallet balance (uses first follow wallet when multiple are configured)
     results['summary']['total_checks'] += 1
     try:
+        proxy = ENV.PROXY_WALLET or ''
+        if len(proxy) < 10:
+            wallet_short = proxy or '(not set)'
+        else:
+            wallet_short = f"{proxy[:6]}...{proxy[-4:]}"
         balance = get_my_balance(ENV.PROXY_WALLET)
-        wallet_short = f"{ENV.PROXY_WALLET[:6]}...{ENV.PROXY_WALLET[-4:]}"
         
         if balance < 10:
             results['checks']['balance'] = {

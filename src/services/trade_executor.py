@@ -3,7 +3,7 @@ Trade executor service - executes trades based on monitored activity
 """
 import asyncio
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from ..config.env import ENV
 from ..models.user_history import get_user_activity_collection
 from ..interfaces.user import UserActivityInterface, UserPositionInterface
@@ -11,12 +11,11 @@ from ..utils.fetch_data import fetch_data_async
 from ..utils.get_my_balance import get_my_balance_async
 from ..utils.post_order import post_order
 from ..utils.logger import (
-    success, info, warning, header, waiting, clear_line, separator, trade as log_trade, balance as log_balance
+    success, info, warning, error, header, waiting, clear_line, separator, trade as log_trade, balance as log_balance
 )
 
 USER_ADDRESSES = ENV.USER_ADDRESSES
 RETRY_LIMIT = ENV.RETRY_LIMIT
-PROXY_WALLET = ENV.PROXY_WALLET
 TRADE_AGGREGATION_ENABLED = ENV.TRADE_AGGREGATION_ENABLED
 TRADE_AGGREGATION_WINDOW_SECONDS = ENV.TRADE_AGGREGATION_WINDOW_SECONDS
 TRADE_AGGREGATION_MIN_TOTAL_USD = 1.0  # Polymarket minimum
@@ -26,10 +25,24 @@ is_running = True
 # Type definitions (using Dict for flexibility)
 TradeWithUser = Dict[str, Any]
 AggregatedTrade = Dict[str, Any]
+# (proxy_wallet, clob_client) per follow wallet
+FollowEntry = Tuple[str, Any]
 
+# Single global round-robin index: each executed trade (single or aggregated) consumes one slot.
+_next_follow_index: int = 0
 
 # Buffer for aggregating trades
 trade_aggregation_buffer: Dict[str, AggregatedTrade] = {}
+
+
+def get_next_follow(follow_list: List[FollowEntry]) -> FollowEntry:
+    """Return (proxy_wallet, clob_client) for the next trade. Does not retry with another wallet on failure."""
+    global _next_follow_index
+    if not follow_list:
+        raise ValueError('follow_list must not be empty')
+    idx = _next_follow_index % len(follow_list)
+    _next_follow_index += 1
+    return follow_list[idx]
 
 
 async def read_temp_trades() -> List[TradeWithUser]:
@@ -49,7 +62,9 @@ async def read_temp_trades() -> List[TradeWithUser]:
         for trade in trades:
             trade['userAddress'] = address
             all_trades.append(trade)
-    
+
+    # Sort by timestamp so round-robin follows time order; put missing timestamp at end
+    all_trades.sort(key=lambda t: (t.get('timestamp') is None, t.get('timestamp') or 0))
     return all_trades
 
 
@@ -131,9 +146,11 @@ def get_ready_aggregated_trades() -> List[AggregatedTrade]:
     return ready
 
 
-async def do_trading(clob_client: Any, trades: List[TradeWithUser]) -> None:
-    """Execute trades"""
+async def do_trading(follow_list: List[FollowEntry], trades: List[TradeWithUser]) -> None:
+    """Execute trades. Each trade uses the next follow wallet (round-robin). Failure does not retry with another wallet."""
     for trade in trades:
+        proxy_wallet, clob_client = get_next_follow(follow_list)
+
         # Mark trade as being processed immediately to prevent duplicate processing
         collection = get_user_activity_collection(trade['userAddress'])
         collection.update_one(
@@ -154,48 +171,56 @@ async def do_trading(clob_client: Any, trades: List[TradeWithUser]) -> None:
                 'transactionHash': trade.get('transactionHash'),
             }
         )
-        
-        my_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={PROXY_WALLET}')
-        user_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={trade["userAddress"]}')
-        
-        my_positions_list = my_positions_data if isinstance(my_positions_data, list) else []
-        user_positions_list = user_positions_data if isinstance(user_positions_data, list) else []
-        
-        my_position = next(
-            (p for p in my_positions_list if p.get('conditionId') == trade.get('conditionId')),
-            None
-        )
-        user_position = next(
-            (p for p in user_positions_list if p.get('conditionId') == trade.get('conditionId')),
-            None
-        )
-        
-        # Get USDC balance
-        my_balance = await get_my_balance_async(PROXY_WALLET)
-        
-        # Calculate trader's total portfolio value from positions
-        user_balance = sum(pos.get('currentValue', 0) or 0 for pos in user_positions_list)
-        
-        log_balance(my_balance, user_balance, trade['userAddress'])
-        
-        # Execute the trade: use 'merge' for SELL so we actually sell our position (sell branch is not implemented)
-        await post_order(
-            clob_client,
-            'buy' if trade.get('side') == 'BUY' else 'merge',
-            my_position,
-            user_position,
-            trade,
-            my_balance,
-            user_balance,
-            trade['userAddress']
-        )
-        
+        try:
+            my_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={proxy_wallet}')
+            user_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={trade["userAddress"]}')
+            
+            my_positions_list = my_positions_data if isinstance(my_positions_data, list) else []
+            user_positions_list = user_positions_data if isinstance(user_positions_data, list) else []
+            
+            my_position = next(
+                (p for p in my_positions_list if p.get('conditionId') == trade.get('conditionId')),
+                None
+            )
+            user_position = next(
+                (p for p in user_positions_list if p.get('conditionId') == trade.get('conditionId')),
+                None
+            )
+            
+            # Get USDC balance for this follow wallet
+            my_balance = await get_my_balance_async(proxy_wallet)
+            
+            # Calculate trader's total portfolio value from positions
+            user_balance = sum(pos.get('currentValue', 0) or 0 for pos in user_positions_list)
+            
+            log_balance(my_balance, user_balance, trade['userAddress'])
+            
+            # Execute the trade: use 'merge' for SELL so we actually sell our position (sell branch is not implemented)
+            await post_order(
+                clob_client,
+                'buy' if trade.get('side') == 'BUY' else 'merge',
+                my_position,
+                user_position,
+                trade,
+                my_balance,
+                user_balance,
+                trade['userAddress']
+            )
+        except Exception as e:
+            error(
+                f'Trade execution failed for {trade.get("slug") or trade.get("asset", "?")} '
+                f'(follow wallet {proxy_wallet[:10]}...): {e}'
+            )
+            warning('Trade marked as processed; will not retry with another wallet.')
+            collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
         separator()
 
 
-async def do_aggregated_trading(clob_client: Any, aggregated_trades: List[AggregatedTrade]) -> None:
-    """Execute aggregated trades"""
+async def do_aggregated_trading(follow_list: List[FollowEntry], aggregated_trades: List[AggregatedTrade]) -> None:
+    """Execute aggregated trades. Each aggregated trade uses the next follow wallet (round-robin)."""
     for agg in aggregated_trades:
+        proxy_wallet, clob_client = get_next_follow(follow_list)
+
         header(f"AGGREGATED TRADE ({len(agg['trades'])} trades combined)")
         info(f"Market: {agg.get('slug') or agg.get('asset', 'unknown')}")
         info(f"Side: {agg.get('side', 'BUY')}")
@@ -209,50 +234,58 @@ async def do_aggregated_trading(clob_client: Any, aggregated_trades: List[Aggreg
                 {'_id': trade['_id']},
                 {'$set': {'botExcutedTime': 1}}
             )
-        
-        my_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={PROXY_WALLET}')
-        user_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={agg["userAddress"]}')
-        
-        my_positions_list = my_positions_data if isinstance(my_positions_data, list) else []
-        user_positions_list = user_positions_data if isinstance(user_positions_data, list) else []
-        
-        my_position = next(
-            (p for p in my_positions_list if p.get('conditionId') == agg.get('conditionId')),
-            None
-        )
-        user_position = next(
-            (p for p in user_positions_list if p.get('conditionId') == agg.get('conditionId')),
-            None
-        )
-        
-        # Get USDC balance
-        my_balance = await get_my_balance_async(PROXY_WALLET)
-        
-        # Calculate trader's total portfolio value from positions
-        user_balance = sum(pos.get('currentValue', 0) or 0 for pos in user_positions_list)
-        
-        log_balance(my_balance, user_balance, agg['userAddress'])
-        
-        # Create a synthetic trade object for postOrder using aggregated values
-        synthetic_trade: TradeWithUser = {
-            **agg['trades'][0],  # Use first trade as template
-            'usdcSize': agg['totalUsdcSize'],
-            'price': agg['averagePrice'],
-            'side': agg.get('side', 'BUY'),
-        }
-        
-        # Execute the aggregated trade: use 'merge' for SELL so we actually sell our position
-        await post_order(
-            clob_client,
-            'buy' if agg.get('side', 'BUY') == 'BUY' else 'merge',
-            my_position,
-            user_position,
-            synthetic_trade,
-            my_balance,
-            user_balance,
-            agg['userAddress']
-        )
-        
+        try:
+            my_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={proxy_wallet}')
+            user_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={agg["userAddress"]}')
+            
+            my_positions_list = my_positions_data if isinstance(my_positions_data, list) else []
+            user_positions_list = user_positions_data if isinstance(user_positions_data, list) else []
+            
+            my_position = next(
+                (p for p in my_positions_list if p.get('conditionId') == agg.get('conditionId')),
+                None
+            )
+            user_position = next(
+                (p for p in user_positions_list if p.get('conditionId') == agg.get('conditionId')),
+                None
+            )
+            
+            # Get USDC balance for this follow wallet
+            my_balance = await get_my_balance_async(proxy_wallet)
+            
+            # Calculate trader's total portfolio value from positions
+            user_balance = sum(pos.get('currentValue', 0) or 0 for pos in user_positions_list)
+            
+            log_balance(my_balance, user_balance, agg['userAddress'])
+            
+            # Create a synthetic trade object for postOrder using aggregated values
+            synthetic_trade: TradeWithUser = {
+                **agg['trades'][0],  # Use first trade as template
+                'usdcSize': agg['totalUsdcSize'],
+                'price': agg['averagePrice'],
+                'side': agg.get('side', 'BUY'),
+            }
+            
+            # Execute the aggregated trade: use 'merge' for SELL so we actually sell our position
+            await post_order(
+                clob_client,
+                'buy' if agg.get('side', 'BUY') == 'BUY' else 'merge',
+                my_position,
+                user_position,
+                synthetic_trade,
+                my_balance,
+                user_balance,
+                agg['userAddress']
+            )
+        except Exception as e:
+            error(
+                f'Aggregated trade failed for {agg.get("slug") or agg.get("asset", "?")} '
+                f'(follow wallet {proxy_wallet[:10]}...): {e}'
+            )
+            warning('Aggregation marked as processed; will not retry with another wallet.')
+            for trade in agg['trades']:
+                col = get_user_activity_collection(trade['userAddress'])
+                col.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
         separator()
 
 
@@ -263,9 +296,11 @@ def stop_trade_executor() -> None:
     info('Trade executor shutdown requested...')
 
 
-async def trade_executor(clob_client: Any) -> None:
-    """Main trade executor function"""
-    success(f'Trade executor ready for {len(USER_ADDRESSES)} trader(s)')
+async def trade_executor(follow_list: List[FollowEntry]) -> None:
+    """Main trade executor function. follow_list: [(proxy_wallet, clob_client), ...]."""
+    if not follow_list:
+        raise ValueError('trade_executor requires at least one follow wallet')
+    success(f'Trade executor ready for {len(USER_ADDRESSES)} trader(s), {len(follow_list)} follow wallet(s)')
     if TRADE_AGGREGATION_ENABLED:
         info(
             f'Trade aggregation enabled: {TRADE_AGGREGATION_WINDOW_SECONDS}s window, '
@@ -296,7 +331,7 @@ async def trade_executor(clob_client: Any) -> None:
                         # Execute large trades immediately (not aggregated)
                         clear_line()
                         header('IMMEDIATE TRADE (above threshold)')
-                        await do_trading(clob_client, [trade])
+                        await do_trading(follow_list, [trade])
                 
                 last_check = time.time()
             
@@ -307,7 +342,7 @@ async def trade_executor(clob_client: Any) -> None:
                 header(
                     f"{len(ready_aggregations)} AGGREGATED TRADE{'S' if len(ready_aggregations) > 1 else ''} READY"
                 )
-                await do_aggregated_trading(clob_client, ready_aggregations)
+                await do_aggregated_trading(follow_list, ready_aggregations)
                 last_check = time.time()
             
             # Update waiting message
@@ -324,7 +359,7 @@ async def trade_executor(clob_client: Any) -> None:
             if trades:
                 clear_line()
                 header(f'{len(trades)} NEW TRADE{"S" if len(trades) > 1 else ""} TO COPY')
-                await do_trading(clob_client, trades)
+                await do_trading(follow_list, trades)
                 last_check = time.time()
             else:
                 # Update waiting message every 300ms for smooth animation

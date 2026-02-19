@@ -6,7 +6,7 @@ import signal
 import sys
 from src.config.db import connect_db, close_db
 from src.config.env import ENV
-from src.utils.create_clob_client import create_clob_client
+from src.utils.create_clob_client import create_clob_clients
 from src.services.trade_executor import trade_executor, stop_trade_executor
 from src.services.trade_monitor import trade_monitor, stop_trade_monitor
 from src.utils.logger import startup, info, success, warning, error, separator
@@ -72,7 +72,7 @@ async def main():
         print('  Run system status check: python -m src.scripts.setup.system_status\n')
         
         await connect_db()
-        startup(ENV.USER_ADDRESSES, ENV.PROXY_WALLET)
+        startup(ENV.USER_ADDRESSES, ENV.PROXY_WALLETS)
         
         # Perform initial system status check
         info('Performing initial system status check...')
@@ -82,9 +82,11 @@ async def main():
         if not status_result.get('healthy', False):
             warning('System status check failed, but continuing startup...')
         
-        info('Initializing CLOB client...')
-        clob_client = await create_clob_client()
-        success('CLOB client ready')
+        info('Initializing CLOB client(s)...')
+        follow_list = await create_clob_clients()
+        if not follow_list:
+            raise ValueError('No follow wallets available; check PROXY_WALLET / PROXY_WALLETS and PRIVATE_KEY / PRIVATE_KEYS')
+        success(f'CLOB ready for {len(follow_list)} follow wallet(s)')
         
         separator()
         info('Starting trade monitor...')
@@ -92,8 +94,8 @@ async def main():
         monitor_task = asyncio.create_task(trade_monitor())
         
         info('Starting trade executor...')
-        # Start trade executor in background
-        executor_task = asyncio.create_task(trade_executor(clob_client))
+        # Start trade executor in background (round-robin over follow_list)
+        executor_task = asyncio.create_task(trade_executor(follow_list))
         
         # Wait for shutdown event
         await shutdown_event.wait()
