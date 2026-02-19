@@ -1,14 +1,20 @@
 """
 Post order to Polymarket
+
+Security note: CLOB order submission (create_market_order / post_order) may be a
+placeholder. For production use you must implement and audit the real CLOB client.
+See SECURITY.md and src/utils/create_clob_client.py.
 """
 from typing import Optional, Dict, Any
 from ..config.env import ENV
 from ..models.user_history import get_user_activity_collection
-from ..utils.logger import info, warning, order_result
+from ..utils.logger import info, warning, order_result, error
 from ..config.copy_strategy import calculate_order_size, get_trade_multiplier
 
 RETRY_LIMIT = ENV.RETRY_LIMIT
 COPY_STRATEGY_CONFIG = ENV.COPY_STRATEGY_CONFIG
+
+_CLOB_PLACEHOLDER_WARNED = False
 
 # Polymarket minimum order sizes
 MIN_ORDER_SIZE_USD = 1.0  # Minimum order size in USD for BUY orders
@@ -50,6 +56,20 @@ def is_insufficient_balance_or_allowance_error(message: Optional[str]) -> bool:
         return False
     lower = message.lower()
     return 'not enough balance' in lower or 'allowance' in lower
+
+
+def _warn_if_clob_placeholder(response: Any) -> None:
+    """Log a one-time warning when CLOB client returns the placeholder (not implemented) response."""
+    global _CLOB_PLACEHOLDER_WARNED
+    if _CLOB_PLACEHOLDER_WARNED:
+        return
+    err = extract_order_error(response)
+    if err and 'not implemented' in (err or '').lower() and 'clob' in (err or '').lower():
+        _CLOB_PLACEHOLDER_WARNED = True
+        error(
+            'CLOB order submission is a PLACEHOLDER. No real orders are being sent. '
+            'For production you must implement and audit create_market_order/post_order in create_clob_client.py. See SECURITY.md.'
+        )
 
 
 async def post_order(
@@ -118,6 +138,7 @@ async def post_order(
                     order_result(True, f'Sold {order_args["amount"]} tokens at ${order_args["price"]}')
                     remaining -= order_args['amount']
                 else:
+                    _warn_if_clob_placeholder(resp)
                     error_message = extract_order_error(resp)
                     if is_insufficient_balance_or_allowance_error(error_message):
                         abort_due_to_funds = True
@@ -243,6 +264,7 @@ async def post_order(
                     # Update balance after successful order
                     available_balance -= order_args['amount']
                 else:
+                    _warn_if_clob_placeholder(resp)
                     error_message = extract_order_error(resp)
                     if is_insufficient_balance_or_allowance_error(error_message):
                         abort_due_to_funds = True

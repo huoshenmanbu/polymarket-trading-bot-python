@@ -334,10 +334,10 @@ def main():
                 print('\n[INFO] Setup cancelled. Your existing .env file was not modified.')
                 return
             
-            # Backup existing file
+            # Backup existing file (path is in .gitignore - do not commit)
             backup_path = Path.cwd() / '.env.backup'
             backup_path.write_text(env_path.read_text())
-            print('[OK] Backed up existing .env to .env.backup')
+            print('[OK] Backed up existing .env to .env.backup (.env.backup is gitignored)')
         
         # Write .env file
         env_path.write_text(env_content)

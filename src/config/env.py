@@ -285,3 +285,18 @@ class ENV:
     RPC_URL: str = os.getenv('RPC_URL', '')
     USDC_CONTRACT_ADDRESS: str = os.getenv('USDC_CONTRACT_ADDRESS', '')
 
+
+def _validate_no_self_copy() -> None:
+    """Prevent copying from own wallet (PROXY_WALLET in USER_ADDRESSES)."""
+    if not ENV.PROXY_WALLET or not ENV.USER_ADDRESSES:
+        return
+    proxy_lower = ENV.PROXY_WALLET.lower().strip()
+    if proxy_lower in [a.lower() for a in ENV.USER_ADDRESSES]:
+        raise ValueError(
+            'PROXY_WALLET must not be in USER_ADDRESSES. '
+            'Remove your own wallet from the list of traders to copy.'
+        )
+
+
+_validate_no_self_copy()
+

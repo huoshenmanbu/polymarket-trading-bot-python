@@ -1,7 +1,9 @@
 """
-Create Polymarket CLOB client
-Note: This is a simplified wrapper. For full functionality, you may need to use
-the JavaScript SDK via subprocess or implement the full Python API client.
+Create Polymarket CLOB client.
+
+Note: Order submission (create_market_order, post_order) and API key creation
+(create_api_key, derive_api_key) are placeholders. For production you must
+implement and audit the full CLOB flow. See SECURITY.md and Polymarket CLOB docs.
 """
 from typing import Optional, Dict, Any
 from web3 import Web3

@@ -20,6 +20,8 @@ out/
 
 # Environment variables
 .env
+.env.backup
+.env.*.backup
 
 # Temporary files
 *.tmp

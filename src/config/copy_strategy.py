@@ -55,7 +55,7 @@ class CopyStrategyConfig:
     max_order_size_usd: float = 100.0  # Maximum size for a single order
     min_order_size_usd: float = 1.0  # Minimum size for a single order
     max_position_size_usd: Optional[float] = None  # Maximum total size for a position (optional)
-    max_daily_volume_usd: Optional[float] = None  # Maximum total volume per day (optional)
+    max_daily_volume_usd: Optional[float] = None  # Max total volume per day (optional; not yet enforced in executor)
 
 
 @dataclass
@@ -131,11 +131,11 @@ def calculate_order_size(
         reduced_by_balance = True
         reasoning += f" → Reduced to fit balance (${max_affordable:.2f})"
 
-    # Step 5: Check minimum order size
+    # Step 5: Check minimum order size (skip order if below minimum)
     if final_amount < config.min_order_size_usd:
         below_minimum = True
-        reasoning += f" → Below minimum ${config.min_order_size_usd}"
-        final_amount = config.min_order_size_usd
+        reasoning += f" → Below minimum ${config.min_order_size_usd} (order skipped)"
+        final_amount = 0.0
 
     return OrderSizeCalculation(
         trader_order_size=trader_order_size,

@@ -178,10 +178,10 @@ async def do_trading(clob_client: Any, trades: List[TradeWithUser]) -> None:
         
         log_balance(my_balance, user_balance, trade['userAddress'])
         
-        # Execute the trade
+        # Execute the trade: use 'merge' for SELL so we actually sell our position (sell branch is not implemented)
         await post_order(
             clob_client,
-            'buy' if trade.get('side') == 'BUY' else 'sell',
+            'buy' if trade.get('side') == 'BUY' else 'merge',
             my_position,
             user_position,
             trade,
@@ -241,10 +241,10 @@ async def do_aggregated_trading(clob_client: Any, aggregated_trades: List[Aggreg
             'side': agg.get('side', 'BUY'),
         }
         
-        # Execute the aggregated trade
+        # Execute the aggregated trade: use 'merge' for SELL so we actually sell our position
         await post_order(
             clob_client,
-            'buy' if agg.get('side', 'BUY') == 'BUY' else 'sell',
+            'buy' if agg.get('side', 'BUY') == 'BUY' else 'merge',
             my_position,
             user_position,
             synthetic_trade,
