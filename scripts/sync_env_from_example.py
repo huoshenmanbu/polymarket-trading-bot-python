@@ -124,13 +124,8 @@ def sync_env(
         key = extract_key_from_example_line(line)
         if key is not None and key in final_values:
             value = final_values[key]
-            # 保持原有格式：KEY = value（若原行用空格就保留空格）
-            stripped = line.strip()
-            if "=" in stripped:
-                prefix = stripped.split("=", 1)[0]
-                output_lines.append(f"{prefix}= {_format_value(value)}")
-            else:
-                output_lines.append(f"{key} = {_format_value(value)}")
+            # 使用标准格式：KEY=value（等号两边不能有空格，符合 shell 规范）
+            output_lines.append(f"{key}={_format_value(value)}")
         else:
             output_lines.append(line)
 
@@ -138,7 +133,7 @@ def sync_env(
         output_lines.append("")
         output_lines.append("# ---------- 仅存在于 .env 的变量（未在 .env.example 中定义） ----------")
         for k, v in sorted(extra_in_env.items()):
-            output_lines.append(f"{k} = {_format_value(v)}")
+            output_lines.append(f"{k}={_format_value(v)}")
 
     new_content = "\n".join(output_lines) + "\n"
 
