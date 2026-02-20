@@ -60,3 +60,10 @@ strategy_factory_results/
 
 # Legacy directories (for backward compatibility)
 logs/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
