@@ -1,9 +1,9 @@
 """
 Post order to Polymarket
 
-Security note: CLOB order submission (create_market_order / post_order) may be a
-placeholder. For production use you must implement and audit the real CLOB client.
-See SECURITY.md and src/utils/create_clob_client.py.
+Uses the CLOB client (create_clob_client.ClobClient) to create and submit orders.
+The real implementation lives in src/utils/create_clob_client.py and src/utils/clob_signing.py.
+Before production use, audit the signing and order flow per SECURITY.md.
 """
 from typing import Optional, Dict, Any
 from ..config.env import ENV
@@ -14,6 +14,7 @@ from ..config.copy_strategy import calculate_order_size, get_trade_multiplier
 RETRY_LIMIT = ENV.RETRY_LIMIT
 COPY_STRATEGY_CONFIG = ENV.COPY_STRATEGY_CONFIG
 
+# One-time warning if the CLOB response indicates "not implemented" (e.g. stub client)
 _CLOB_PLACEHOLDER_WARNED = False
 
 # Polymarket minimum order sizes
@@ -59,7 +60,7 @@ def is_insufficient_balance_or_allowance_error(message: Optional[str]) -> bool:
 
 
 def _warn_if_clob_placeholder(response: Any) -> None:
-    """Log a one-time warning when CLOB client returns the placeholder (not implemented) response."""
+    """Log a one-time warning if the CLOB response indicates a stub/not-implemented client."""
     global _CLOB_PLACEHOLDER_WARNED
     if _CLOB_PLACEHOLDER_WARNED:
         return
@@ -67,8 +68,8 @@ def _warn_if_clob_placeholder(response: Any) -> None:
     if err and 'not implemented' in (err or '').lower() and 'clob' in (err or '').lower():
         _CLOB_PLACEHOLDER_WARNED = True
         error(
-            'CLOB order submission is a PLACEHOLDER. No real orders are being sent. '
-            'For production you must implement and audit create_market_order/post_order in create_clob_client.py. See SECURITY.md.'
+            'CLOB returned "not implemented". Ensure you are using the real CLOB client '
+            '(create_clob_client.ClobClient) and that create_market_order/post_order are implemented. See SECURITY.md.'
         )
 
 

@@ -20,26 +20,38 @@ This document summarizes the main security and implementation items to address b
   - All ingested trades are written to MongoDB with a well-defined document shape; the executor reads only from these collections.
 - **Status:** Implemented in `src/services/trade_monitor.py` (polling-based ingest from data-api).
 
-## 3. CLOB order submission (placeholders)
+## 3. CLOB order submission
 
-- **Risk:** The CLOB client’s order submission (`create_market_order`, `post_order`, and related key/derive logic) is a **placeholder**. No real orders are sent until you implement and wire a production client.
-- **Mitigation for production:**
-  1. **Implement** in `src/utils/create_clob_client.py`:
-     - `create_api_key` / `derive_api_key` (as required by Polymarket).
-     - `create_market_order`: build and sign orders in the format required by the CLOB API.
-     - `post_order`: send the signed order to the CLOB (e.g. FOK/IOC as needed).
-  2. **Audit** the full path: key derivation, order construction, signing, and HTTP/WS submission. Prefer the official Polymarket CLOB docs and reference implementations.
-  3. When the placeholder is still in use, the first failed order will trigger a one-time runtime warning that no real orders are being sent.
-- **Status:** Placeholder remains; runtime warning added. For live use you must implement and audit the CLOB client as above.
+- **Risk:** Order submission must correctly create API keys, sign orders, and send them to the CLOB; otherwise funds could be at risk or orders could fail silently.
+- **Mitigation (implemented):**
+  1. **Implemented** in `src/utils/create_clob_client.py` and `src/utils/clob_signing.py`:
+     - **L1 auth:** `create_api_key` / `derive_api_key` (EIP-712 signing) for API key creation/derivation.
+     - **L2 auth:** HMAC-SHA256 signing for order submission.
+     - **Orders:** `create_market_order` builds and signs orders via py-order-utils; `post_order` sends signed orders to the CLOB (FOK/IOC/GTC/GTD).
+  2. **Before production you should:**
+     - **Audit** the full path: key derivation, order construction, signing, and HTTP submission. Prefer the official [Polymarket CLOB docs](https://docs.polymarket.com/) and reference implementations.
+     - **Test** on a small balance or testnet first; confirm orders appear as expected on Polymarket.
+     - Ensure system clock is synchronized (NTP); L1 auth rejects timestamps more than 5 minutes off.
+- **Status:** CLOB client is implemented. Audit and live testing recommended before production use.
 
 ---
 
 ## Summary
 
-After handling the above:
+| Item | Status |
+|------|--------|
+| **`.env.backup`** | Ignored by git; do not commit any `.env*` backup files. |
+| **Trade monitor** | Implemented; data source is the official data-api only. |
+| **CLOB client** | Implemented (create/derive API key, create_market_order, post_order). Audit and test before production. |
 
-1. **`.env.backup`** – Ignored by git; do not commit any `.env*` backup files.
-2. **Trade monitor** – Implemented; data source is the official data-api only.
-3. **CLOB** – Placeholder; implement and audit order creation and submission before production.
+The codebase is not designed to steal funds; the main risks are env leakage, unclear or missing data ingestion, and incorrect order submission. Addressing this checklist and auditing the CLOB path makes it reasonable to use for live trading after testing.
 
-The codebase is not designed to steal funds; the main risks are env leakage, unclear or missing data ingestion, and placeholder order submission. Addressing this checklist makes it safe to use for live trading once the CLOB client is fully implemented and audited.
+---
+
+## Before going live (recommended)
+
+- [ ] **Secrets:** Never commit `.env`, `.env.backup`, or any file containing `PRIVATE_KEY` / `PRIVATE_KEYS` / API credentials.
+- [ ] **Dependencies:** Run `pip install -r requirements.txt` and consider `pip audit` (or similar) to check for known vulnerabilities.
+- [ ] **CLOB audit:** Review `src/utils/clob_signing.py` and `src/utils/create_clob_client.py`; confirm EIP-712 domain, HMAC message format, and order fields match Polymarket’s current API.
+- [ ] **Small test:** Run with a small balance; verify a few orders on Polymarket and in MongoDB.
+- [ ] **Rate limits:** Be aware of Polymarket/CLOB rate limits; the bot uses retries and backoff but does not enforce a global rate cap.
