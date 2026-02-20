@@ -451,10 +451,24 @@ class ClobClient:
             
             # Generate order parameters
             order_nonce = generate_order_nonce()
-            # Use cryptographically secure random for salt to prevent prediction
-            salt = secrets.randbelow(2**31 - 1) + 1  # Range [1, 2^31-1]
             expiration = int(time.time()) + (30 * 24 * 60 * 60)  # 30 days from now
             fee_rate_bps = 0  # Default fee rate
+            
+            # Calculate makerAmount and takerAmount in smallest units (6 decimals for USDC and tokens)
+            # For BUY orders:
+            # - takerAmount: USDC amount we're paying (in smallest units, 6 decimals)
+            # - makerAmount: Token amount we're receiving (in smallest units, 6 decimals)
+            # For prediction markets: amount is USDC, price is token price (0-1)
+            # Token amount = USDC amount / price
+            USDC_DECIMALS = 6
+            TOKEN_DECIMALS = 6
+            
+            taker_amount_usdc = amount_val  # USDC amount we're paying
+            maker_amount_tokens = amount_val / price_val  # Token amount we're receiving
+            
+            # Convert to smallest units (multiply by 10^decimals)
+            taker_amount_str = str(int(taker_amount_usdc * (10 ** USDC_DECIMALS)))
+            maker_amount_str = str(int(maker_amount_tokens * (10 ** TOKEN_DECIMALS)))
             
             # Get private key for signing (py-order-utils Signer expects 0x prefix)
             private_key = self._get_private_key()
@@ -466,19 +480,19 @@ class ClobClient:
             # Create OrderBuilder
             builder = OrderBuilder(self.exchange_address, self.chain_id, signer)
             
-            # Build OrderData (use string price/size for precision)
+            # Build OrderData (use camelCase parameter names and string values)
             order_data = OrderData(
-                token_id=token_id,
-                price=price_str,
-                size=size_str,
-                side=side,
-                expiration=expiration,
-                nonce=order_nonce,
                 maker=maker_address,
+                taker='0x0000000000000000000000000000000000000000',  # Zero address for open orders
+                tokenId=token_id,
+                makerAmount=maker_amount_str,
+                takerAmount=taker_amount_str,
+                side=side,
+                feeRateBps=str(fee_rate_bps),
+                nonce=str(order_nonce),
                 signer=signer_address,
-                salt=salt,
-                fee_rate_bps=fee_rate_bps,
-                signature_type=self.signature_type_int
+                expiration=str(expiration),
+                signatureType=self.signature_type_int
             )
             
             # Build and sign order
