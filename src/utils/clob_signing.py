@@ -64,8 +64,6 @@ def sign_eip712_auth(
     Raises:
         ValueError: If timestamp is unreasonable or parameters are invalid
     """
-    from eth_account import Account
-    from eth_account.messages import encode_defunct, SignableMessage
     
     # Validate timestamp is within reasonable range
     current_time = int(time.time())
@@ -94,20 +92,16 @@ def sign_eip712_auth(
     signable_bytes = clob_auth.signable_bytes(domain)
     msg_hash = keccak(signable_bytes)
     
-    # Normalize private key (ensure 0x prefix for eth_account)
+    # Normalize private key (ensure 0x prefix for py_order_utils Signer)
     key_hex = private_key if isinstance(private_key, str) and private_key.startswith('0x') else ('0x' + private_key)
-    account = Account.from_key(key_hex)
     
-    # Use SignableMessage to sign raw hash (replaces deprecated signHash)
-    # version=b'\x00' indicates raw hash signing per EIP-191 specification
-    signable_msg = SignableMessage(
-        version=b'\x00',
-        header=b'',
-        body=msg_hash
-    )
-    signed = account.sign_message(signable_msg)
+    # Use py_order_utils Signer to sign the hash (matches official Polymarket implementation)
+    from py_order_utils.signer import Signer
+    signer = Signer(key_hex)
+    auth_struct_hash = prepend_zx(msg_hash.hex())
+    signature = signer.sign(auth_struct_hash)
     
-    return prepend_zx(signed.signature.hex())
+    return prepend_zx(signature)
 
 
 def sign_hmac_l2(
