@@ -32,7 +32,7 @@ class ClobAuth(EIP712Struct):
     """EIP-712 ClobAuth struct for L1 authentication"""
     address = Address()
     timestamp = String()
-    nonce = Uint(256)
+    nonce = Uint()
     message = String()
 
 
@@ -77,12 +77,30 @@ def sign_eip712_auth(
     if nonce < 0:
         raise ValueError(f"Nonce must be non-negative, got {nonce}")
     
+    # Normalize private key (ensure 0x prefix for py_order_utils Signer)
+    key_hex = private_key if isinstance(private_key, str) and private_key.startswith('0x') else ('0x' + private_key)
+    
+    # Use py_order_utils Signer (matches official Polymarket implementation)
+    from py_order_utils.signer import Signer
+    signer = Signer(key_hex)
+    
+    # Get address from signer to ensure it matches the private key
+    # This matches the official implementation which uses signer.address()
+    signer_address_from_key = signer.address()
+    
+    # Verify the provided address matches the signer's address
+    if signer_address.lower() != signer_address_from_key.lower():
+        raise ValueError(
+            f"Address mismatch: provided address {signer_address} does not match "
+            f"address derived from private key {signer_address_from_key}"
+        )
+    
     # Get domain
     domain = get_clob_auth_domain(chain_id)
     
-    # Create ClobAuth struct
+    # Create ClobAuth struct using signer's address (matches official implementation)
     clob_auth = ClobAuth(
-        address=signer_address,
+        address=signer_address_from_key,  # Use address from signer, not the provided one
         timestamp=str(timestamp),
         nonce=nonce,
         message=CLOB_AUTH_MESSAGE
@@ -92,12 +110,7 @@ def sign_eip712_auth(
     signable_bytes = clob_auth.signable_bytes(domain)
     msg_hash = keccak(signable_bytes)
     
-    # Normalize private key (ensure 0x prefix for py_order_utils Signer)
-    key_hex = private_key if isinstance(private_key, str) and private_key.startswith('0x') else ('0x' + private_key)
-    
-    # Use py_order_utils Signer to sign the hash (matches official Polymarket implementation)
-    from py_order_utils.signer import Signer
-    signer = Signer(key_hex)
+    # Sign the hash (matches official implementation)
     auth_struct_hash = prepend_zx(msg_hash.hex())
     signature = signer.sign(auth_struct_hash)
     
