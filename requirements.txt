@@ -12,6 +12,10 @@ eth-account>=0.9.0
 eth-utils>=2.3.0
 nest-asyncio>=1.5.8
 
+# Polymarket CLOB dependencies
+poly-eip712-structs>=0.0.1
+py-order-utils>=0.3.2
+
 # Documentation generation
 markdown>=3.4.0
 # Optional PDF libraries (install one):
