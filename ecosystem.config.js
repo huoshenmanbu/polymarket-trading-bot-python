@@ -3,7 +3,7 @@ module.exports = {
     name: 'polymarket-bot',
     script: 'python',
     args: '-m src.main',
-    interpreter: 'python3', // 如果系统使用 'python' 命令，请改为 'python'
+    interpreter: 'python', // 如果系统使用 'python' 命令，请改为 'python'
     cwd: process.cwd(), // 自动使用当前目录，或手动指定：'/path/to/polymarket-trading-bot-python'
     instances: 1,
     autorestart: true,

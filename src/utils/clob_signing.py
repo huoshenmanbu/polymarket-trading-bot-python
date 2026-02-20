@@ -10,7 +10,7 @@ import base64
 import secrets
 from typing import Dict, Any, Optional
 from eth_utils import keccak
-from poly_eip712_structs import make_domain
+from poly_eip712_structs import make_domain, EIP712Struct, Address, String, Uint
 from py_order_utils.utils import prepend_zx
 from web3 import Web3
 
@@ -28,44 +28,12 @@ EXCHANGE_ADDRESS_NEG_RISK = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
 TIMESTAMP_TOLERANCE_SECONDS = 300
 
 
-class ClobAuth:
+class ClobAuth(EIP712Struct):
     """EIP-712 ClobAuth struct for L1 authentication"""
-    
-    def __init__(self, address: str, timestamp: str, nonce: int, message: str):
-        self.address = address
-        self.timestamp = timestamp
-        self.nonce = nonce
-        self.message = message
-    
-    def signable_bytes(self, domain: Dict[str, Any]) -> bytes:
-        """Generate signable bytes for EIP-712 signing"""
-        from poly_eip712_structs import make_struct
-        
-        types = {
-            "ClobAuth": [
-                {"name": "address", "type": "address"},
-                {"name": "timestamp", "type": "string"},
-                {"name": "nonce", "type": "uint256"},
-                {"name": "message", "type": "string"},
-            ]
-        }
-        
-        value = {
-            "address": self.address,
-            "timestamp": self.timestamp,
-            "nonce": self.nonce,
-            "message": self.message,
-        }
-        
-        try:
-            struct = make_struct(types["ClobAuth"], value)
-            return struct.signable_bytes(domain)
-        except Exception as e:
-            # If make_struct fails, raise with helpful error message
-            raise RuntimeError(
-                f"Failed to create EIP-712 struct: {e}. "
-                f"Ensure poly-eip712-structs is installed correctly: pip install poly-eip712-structs"
-            ) from e
+    address = Address()
+    timestamp = String()
+    nonce = Uint(256)
+    message = String()
 
 
 def get_clob_auth_domain(chain_id: int) -> Dict[str, Any]:
@@ -111,6 +79,9 @@ def sign_eip712_auth(
     if nonce < 0:
         raise ValueError(f"Nonce must be non-negative, got {nonce}")
     
+    # Get domain
+    domain = get_clob_auth_domain(chain_id)
+    
     # Create ClobAuth struct
     clob_auth = ClobAuth(
         address=signer_address,
@@ -118,9 +89,6 @@ def sign_eip712_auth(
         nonce=nonce,
         message=CLOB_AUTH_MESSAGE
     )
-    
-    # Get domain
-    domain = get_clob_auth_domain(chain_id)
     
     # Generate signable bytes and hash
     signable_bytes = clob_auth.signable_bytes(domain)

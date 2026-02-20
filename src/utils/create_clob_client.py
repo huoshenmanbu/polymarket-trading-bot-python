@@ -410,8 +410,7 @@ class ClobClient:
         try:
             from py_order_utils.builders import OrderBuilder
             from py_order_utils.signer import Signer
-            from py_order_utils.order import OrderData
-            from py_order_utils.types import Side
+            from py_order_utils.model import OrderData, BUY, SELL
             
             # Extract order parameters (preserve string for precision; validate numerically)
             side_str = order_args.get('side', 'BUY').upper()
@@ -439,8 +438,8 @@ class ClobClient:
             if price_val <= 0 or price_val >= 1:
                 raise ValueError(f"price must be between 0 and 1 (exclusive) for prediction markets, got {price_val}")
             
-            # Convert side to enum
-            side = Side.BUY if side_str == 'BUY' else Side.SELL
+            # Convert side to constant
+            side = BUY if side_str == 'BUY' else SELL
             
             # Get addresses in checksum format (must be set by client initialization)
             maker_raw = self.funder or self.eoa_address or (getattr(self.wallet, 'address', None) if self.wallet else None)
@@ -495,7 +494,7 @@ class ClobClient:
                     'tokenID': token_id,
                     'price': price_str,
                     'size': size_str,
-                    'side': 0 if side == Side.BUY else 1,
+                    'side': side,  # BUY=0, SELL=1
                     'expiration': expiration,
                     'nonce': order_nonce,
                     'maker': maker_address,
