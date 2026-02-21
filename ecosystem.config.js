@@ -14,13 +14,14 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 4000,
       env: {
-        PYTHONUNBUFFERED: "1"
+        PYTHONUNBUFFERED: "1",
+        TZ: "Asia/Shanghai"
       },
       error_file: "/root/polymarket-trading-bot-python/logs/pm2-error.log",
       out_file: "/root/polymarket-trading-bot-python/logs/pm2-out.log",
       merge_logs: true,
       time: true,
-      log_date_format: "YYYY-MM-DD HH:mm:ss"
+      log_date_format: "YYYY-MM-DD HH:mm:ss Z"
     }
   ]
 };
