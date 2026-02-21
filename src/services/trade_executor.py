@@ -277,6 +277,11 @@ async def do_aggregated_trading(follow_list: List[FollowEntry], aggregated_trade
                 user_balance,
                 agg['userAddress']
             )
+            # post_order only marks the synthetic trade's _id (first trade) as bot: True.
+            # Explicitly mark every individual trade in this aggregation as fully processed.
+            for _t in agg['trades']:
+                _col = get_user_activity_collection(_t['userAddress'])
+                _col.update_one({'_id': _t['_id']}, {'$set': {'bot': True}})
         except Exception as e:
             error(
                 f'Aggregated trade failed for {agg.get("slug") or agg.get("asset", "?")} '
@@ -327,6 +332,11 @@ async def trade_executor(follow_list: List[FollowEntry]) -> None:
                             f"for {trade.get('slug') or trade.get('asset', 'unknown')}"
                         )
                         add_to_aggregation_buffer(trade)
+                        # Mark as being processed immediately to prevent re-fetching on next poll cycle.
+                        # Without this, read_temp_trades() would return the same trade every 0.3s,
+                        # causing it to be added to the buffer repeatedly and inflating the aggregated amount.
+                        _agg_col = get_user_activity_collection(trade['userAddress'])
+                        _agg_col.update_one({'_id': trade['_id']}, {'$set': {'botExcutedTime': 1}})
                     else:
                         # Execute large trades immediately (not aggregated)
                         clear_line()

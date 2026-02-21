@@ -105,6 +105,12 @@ async def post_order(
         abort_due_to_funds = False
         
         while remaining > 0 and retry < RETRY_LIMIT:
+            # Check minimum token size before each attempt
+            if remaining < MIN_ORDER_SIZE_TOKENS:
+                info(f'Remaining position ({remaining:.4f} tokens) below minimum - completing sell')
+                collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
+                break
+
             try:
                 order_book = await clob_client.get_order_book(trade['asset'])
                 if not order_book.get('bids') or len(order_book['bids']) == 0:
@@ -123,20 +129,27 @@ async def post_order(
                     collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
                     break
                 
-                if remaining <= float(max_price_bid['size']):
-                    order_args = {
-                        'side': 'SELL',
-                        'tokenID': token_id,
-                        'amount': remaining,  # Token quantity for SELL orders
-                        'price': float(max_price_bid['price']),
-                    }
-                else:
-                    order_args = {
-                        'side': 'SELL',
-                        'tokenID': token_id,
-                        'amount': float(max_price_bid['size']),  # Token quantity for SELL orders
-                        'price': float(max_price_bid['price']),
-                    }
+                bid_size = float(max_price_bid['size'])
+                bid_price = float(max_price_bid['price'])
+                sell_amount = remaining if remaining <= bid_size else bid_size
+
+                # If the best bid quantity is below the minimum order size we cannot fill it.
+                # Count as a retry (so we don't loop forever) and skip this attempt.
+                if sell_amount < MIN_ORDER_SIZE_TOKENS and remaining >= MIN_ORDER_SIZE_TOKENS:
+                    retry += 1
+                    warning(
+                        f'Best bid size ({bid_size:.4f} tokens) is below minimum '
+                        f'({MIN_ORDER_SIZE_TOKENS} tokens) — order book too thin '
+                        f'(attempt {retry}/{RETRY_LIMIT})'
+                    )
+                    continue
+
+                order_args = {
+                    'side': 'SELL',
+                    'tokenID': token_id,
+                    'amount': sell_amount,
+                    'price': bid_price,
+                }
                 
                 signed_order = await clob_client.create_market_order(order_args)
                 resp = await clob_client.post_order(signed_order, 'FOK')
@@ -288,10 +301,10 @@ async def post_order(
                 warning(f'Order error (attempt {retry}/{RETRY_LIMIT}): {e}')
         
         if abort_due_to_funds:
-            collection.update_one(
-                {'_id': trade['_id']},
-                {'$set': {'bot': True, 'botExcutedTime': RETRY_LIMIT}}
-            )
+            update_fields: dict = {'bot': True, 'botExcutedTime': retry}
+            if total_bought_tokens > 0:
+                update_fields['myBoughtSize'] = total_bought_tokens
+            collection.update_one({'_id': trade['_id']}, {'$set': update_fields})
             return
         
         if retry >= RETRY_LIMIT:

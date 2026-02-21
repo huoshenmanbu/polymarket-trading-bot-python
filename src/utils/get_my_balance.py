@@ -1,6 +1,7 @@
 """
 Get USDC balance for an address
 """
+import asyncio
 from web3 import Web3
 from ..config.env import ENV
 
@@ -16,17 +17,19 @@ USDC_ABI = [
 ]
 
 
-async def get_my_balance_async(address: str) -> float:
-    """Get USDC balance for an address (async)"""
+def _sync_get_balance(address: str) -> float:
+    """Synchronous helper - runs in a thread pool to avoid blocking the event loop."""
     w3 = Web3(Web3.HTTPProvider(ENV.RPC_URL))
-    # Convert address to checksum format
     checksum_address = Web3.to_checksum_address(address)
     checksum_usdc_address = Web3.to_checksum_address(ENV.USDC_CONTRACT_ADDRESS)
     usdc_contract = w3.eth.contract(address=checksum_usdc_address, abi=USDC_ABI)
     balance_usdc = usdc_contract.functions.balanceOf(checksum_address).call()
-    # USDC has 6 decimals
-    balance_usdc_real = balance_usdc / 10**6
-    return float(balance_usdc_real)
+    return float(balance_usdc / 10**6)
+
+
+async def get_my_balance_async(address: str) -> float:
+    """Get USDC balance for an address (async, non-blocking)."""
+    return await asyncio.to_thread(_sync_get_balance, address)
 
 
 def get_my_balance(address: str) -> float:

@@ -14,6 +14,7 @@ For production use, ensure you have:
 
 See SECURITY.md and Polymarket CLOB docs for more information.
 """
+import asyncio
 import json
 import secrets
 import time
@@ -47,28 +48,29 @@ def _order_dict_to_camel(d: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _sync_is_gnosis_safe(address: str) -> bool:
+    """Synchronous helper - runs in a thread pool to avoid blocking the event loop."""
+    w3 = Web3(Web3.HTTPProvider(ENV.RPC_URL))
+    checksum_address = Web3.to_checksum_address(address)
+    code = w3.eth.get_code(checksum_address)
+    if code is None:
+        return False
+    if isinstance(code, bytes):
+        return len(code) > 0 and code != b''
+    code_hex = code.hex() if hasattr(code, 'hex') else str(code)
+    return code_hex not in ('0x', '', '0x0')
+
+
 async def is_gnosis_safe(address: str) -> bool:
     """
     Determines if a wallet is a Gnosis Safe (or other contract) by checking if it has contract code.
-    
+    Runs the blocking web3 RPC call in a thread pool to avoid blocking the asyncio event loop.
+
     Note: This is a heuristic - it detects any contract, not specifically Gnosis Safe.
     For Polymarket, proxy wallets that are contracts are typically Gnosis Safes.
     """
     try:
-        w3 = Web3(Web3.HTTPProvider(ENV.RPC_URL))
-        # Convert address to checksum format for web3.py
-        checksum_address = Web3.to_checksum_address(address)
-        code = w3.eth.get_code(checksum_address)
-        # EOA returns empty bytes b'' or HexBytes('0x')
-        # Contract returns actual bytecode
-        # Check both cases for compatibility with different web3 versions
-        if code is None:
-            return False
-        if isinstance(code, bytes):
-            return len(code) > 0 and code != b''
-        # HexBytes or hex string
-        code_hex = code.hex() if hasattr(code, 'hex') else str(code)
-        return code_hex not in ('0x', '', '0x0')
+        return await asyncio.to_thread(_sync_is_gnosis_safe, address)
     except Exception as e:
         error(f'Error checking wallet type for {address[:10]}...: {e}')
         return False
@@ -463,13 +465,15 @@ class ClobClient:
             fee_rate_bps = 0  # Default fee rate
             
             # Calculate makerAmount and takerAmount in smallest units (6 decimals for USDC and tokens)
+            # Polymarket CTF Exchange convention:
+            # - makerAmount: asset the maker PROVIDES
+            # - takerAmount: asset the maker RECEIVES (i.e. what the taker provides)
             # For BUY orders:
-            # - takerAmount: USDC amount we're paying (in smallest units, 6 decimals)
-            # - makerAmount: Token amount we're receiving (in smallest units, 6 decimals)
+            #   maker provides USDC  → makerAmount = USDC
+            #   maker receives tokens → takerAmount = tokens
             # For SELL orders:
-            # - makerAmount: Token amount we're selling (in smallest units, 6 decimals)
-            # - takerAmount: USDC amount we're receiving (in smallest units, 6 decimals)
-            # For prediction markets: amount is USDC, price is token price (0-1)
+            #   maker provides tokens → makerAmount = tokens
+            #   maker receives USDC  → takerAmount = USDC
             USDC_DECIMALS = 6
             TOKEN_DECIMALS = 6
             
@@ -478,20 +482,18 @@ class ClobClient:
             price_decimal = Decimal(str(price_val))
             
             if side == BUY:
-                # BUY order: we pay USDC, receive tokens
-                taker_amount_usdc = amount_decimal  # USDC amount we're paying
-                maker_amount_tokens = amount_decimal / price_decimal  # Token amount we're receiving
+                # BUY: maker provides USDC collateral, taker provides conditional tokens
+                maker_amount_val = amount_decimal                   # USDC we provide
+                taker_amount_val = amount_decimal / price_decimal   # tokens we receive
             else:
-                # SELL order: we pay tokens, receive USDC
-                # For SELL, amount is token quantity, price is still token price
-                # USDC received = token_amount * price
-                maker_amount_tokens = amount_decimal  # Token amount we're selling
-                taker_amount_usdc = amount_decimal * price_decimal  # USDC amount we're receiving
+                # SELL: maker provides conditional tokens, taker provides USDC collateral
+                maker_amount_val = amount_decimal                   # tokens we provide
+                taker_amount_val = amount_decimal * price_decimal   # USDC we receive
             
             # Convert to smallest units (multiply by 10^decimals) and round down to avoid overflow
             # Use Decimal arithmetic to avoid precision issues
-            taker_amount_int = int((taker_amount_usdc * Decimal(10 ** USDC_DECIMALS)).quantize(Decimal('1'), rounding=ROUND_DOWN))
-            maker_amount_int = int((maker_amount_tokens * Decimal(10 ** TOKEN_DECIMALS)).quantize(Decimal('1'), rounding=ROUND_DOWN))
+            maker_amount_int = int((maker_amount_val * Decimal(10 ** USDC_DECIMALS)).quantize(Decimal('1'), rounding=ROUND_DOWN))
+            taker_amount_int = int((taker_amount_val * Decimal(10 ** TOKEN_DECIMALS)).quantize(Decimal('1'), rounding=ROUND_DOWN))
             
             # Validate amounts are positive and within reasonable bounds
             if taker_amount_int <= 0:

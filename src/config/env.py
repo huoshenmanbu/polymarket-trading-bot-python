@@ -273,11 +273,13 @@ def parse_copy_strategy() -> CopyStrategyConfig:
         print('[WARNING] Using legacy COPY_PERCENTAGE configuration. Consider migrating to COPY_STRATEGY.')
         copy_percentage_val = float(copy_percentage or '10.0')
         trade_multiplier = float(os.getenv('TRADE_MULTIPLIER', '1.0'))
-        effective_percentage = copy_percentage_val * trade_multiplier
 
+        # copy_size stores the raw percentage; trade_multiplier is stored separately so that
+        # calculate_order_size applies it exactly once. Do NOT pre-multiply into copy_size here,
+        # otherwise the multiplier would be applied twice (once in copy_size, once via trade_multiplier).
         config = CopyStrategyConfig(
             strategy=CopyStrategy.PERCENTAGE,
-            copy_size=effective_percentage,
+            copy_size=copy_percentage_val,
             max_order_size_usd=float(os.getenv('MAX_ORDER_SIZE_USD', '100.0')),
             min_order_size_usd=float(os.getenv('MIN_ORDER_SIZE_USD', '1.0')),
             max_position_size_usd=float(os.getenv('MAX_POSITION_SIZE_USD')) if os.getenv('MAX_POSITION_SIZE_USD') else None,
@@ -293,7 +295,6 @@ def parse_copy_strategy() -> CopyStrategyConfig:
             except Exception as error:
                 raise ValueError(f'Failed to parse TIERED_MULTIPLIERS: {error}')
         elif trade_multiplier != 1.0:
-            # If using legacy single multiplier, store it
             config.trade_multiplier = trade_multiplier
 
         return config
