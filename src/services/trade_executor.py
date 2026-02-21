@@ -313,9 +313,12 @@ async def trade_executor(follow_list: List[FollowEntry]) -> None:
         )
     
     last_check = time.time()
+    last_waiting_log = 0.0  # Separate timer for waiting message (throttled for PM2 logs)
+    WAITING_LOG_INTERVAL = 30  # Print "waiting" message at most once every 30 seconds
     
     while is_running:
         trades = await read_temp_trades()
+        now = time.time()
         
         if TRADE_AGGREGATION_ENABLED:
             # Process with aggregation logic
@@ -343,7 +346,8 @@ async def trade_executor(follow_list: List[FollowEntry]) -> None:
                         header('IMMEDIATE TRADE (above threshold)')
                         await do_trading(follow_list, [trade])
                 
-                last_check = time.time()
+                last_check = now
+                last_waiting_log = now
             
             # Check for ready aggregated trades
             ready_aggregations = get_ready_aggregated_trades()
@@ -353,29 +357,31 @@ async def trade_executor(follow_list: List[FollowEntry]) -> None:
                     f"{len(ready_aggregations)} AGGREGATED TRADE{'S' if len(ready_aggregations) > 1 else ''} READY"
                 )
                 await do_aggregated_trading(follow_list, ready_aggregations)
-                last_check = time.time()
+                last_check = now
+                last_waiting_log = now
             
-            # Update waiting message
+            # Update waiting message (throttled)
             if not trades and not ready_aggregations:
-                if time.time() - last_check > 0.3:
+                if now - last_waiting_log >= WAITING_LOG_INTERVAL:
                     buffered_count = len(trade_aggregation_buffer)
                     if buffered_count > 0:
                         waiting(len(USER_ADDRESSES), f'{buffered_count} trade group(s) pending')
                     else:
                         waiting(len(USER_ADDRESSES))
-                    last_check = time.time()
+                    last_waiting_log = now
         else:
             # Original non-aggregation logic
             if trades:
                 clear_line()
                 header(f'{len(trades)} NEW TRADE{"S" if len(trades) > 1 else ""} TO COPY')
                 await do_trading(follow_list, trades)
-                last_check = time.time()
+                last_check = now
+                last_waiting_log = now
             else:
-                # Update waiting message every 300ms for smooth animation
-                if time.time() - last_check > 0.3:
+                # Update waiting message (throttled to avoid PM2 log spam)
+                if now - last_waiting_log >= WAITING_LOG_INTERVAL:
                     waiting(len(USER_ADDRESSES))
-                    last_check = time.time()
+                    last_waiting_log = now
         
         if not is_running:
             break

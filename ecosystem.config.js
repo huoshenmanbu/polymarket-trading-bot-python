@@ -19,7 +19,8 @@ module.exports = {
       error_file: "/root/polymarket-trading-bot-python/logs/pm2-error.log",
       out_file: "/root/polymarket-trading-bot-python/logs/pm2-out.log",
       merge_logs: true,
-      time: true
+      time: true,
+      log_date_format: "YYYY-MM-DD HH:mm:ss"
     }
   ]
 };

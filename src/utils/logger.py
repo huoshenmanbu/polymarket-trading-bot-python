@@ -199,20 +199,17 @@ def separator() -> None:
 
 
 def waiting(trader_count: int, extra_info: Optional[str] = None) -> None:
-    """Print waiting message"""
+    """Print waiting message (not written to file to avoid log spam)"""
     timestamp = datetime.now().strftime('%H:%M:%S')
     message = f'Waiting for trades from {trader_count} trader(s)'
     if extra_info:
         message += f' ({extra_info})'
-    
-    print(f'{Style.DIM}[{timestamp}]{Style.RESET_ALL} {Fore.CYAN}[INFO]{Style.RESET_ALL} {message}', end='\r')
-    sys.stdout.flush()
+    print(f'{Style.DIM}[{timestamp}]{Style.RESET_ALL} {Fore.CYAN}[INFO]{Style.RESET_ALL} {message}')
 
 
 def clear_line() -> None:
-    """Clear current line"""
-    sys.stdout.write('\r' + ' ' * 100 + '\r')
-    sys.stdout.flush()
+    """No-op: clear_line is only meaningful in interactive terminals"""
+    pass
 
 
 def my_positions(
