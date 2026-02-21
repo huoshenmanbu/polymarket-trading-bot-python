@@ -87,9 +87,9 @@ async def post_order(
     collection = get_user_activity_collection(user_address)
     
     if condition == 'merge':
-        info('Executing MERGE strategy...')
+        info('Executing MERGE strategy (SELL order)...')
         if not my_position:
-            warning('No position to merge')
+            warning('No position to merge/sell')
             collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
             return
         
@@ -116,18 +116,25 @@ async def post_order(
                 
                 info(f'Best bid: {max_price_bid["size"]} @ ${max_price_bid["price"]}')
                 
+                # Use trade['asset'] if available, otherwise fall back to my_position['asset']
+                token_id = trade.get('asset') or my_position.get('asset')
+                if not token_id:
+                    warning('Missing tokenID for SELL order')
+                    collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
+                    break
+                
                 if remaining <= float(max_price_bid['size']):
                     order_args = {
                         'side': 'SELL',
-                        'tokenID': my_position['asset'],
-                        'amount': remaining,
+                        'tokenID': token_id,
+                        'amount': remaining,  # Token quantity for SELL orders
                         'price': float(max_price_bid['price']),
                     }
                 else:
                     order_args = {
                         'side': 'SELL',
-                        'tokenID': my_position['asset'],
-                        'amount': float(max_price_bid['size']),
+                        'tokenID': token_id,
+                        'amount': float(max_price_bid['size']),  # Token quantity for SELL orders
                         'price': float(max_price_bid['price']),
                     }
                 
@@ -136,8 +143,10 @@ async def post_order(
                 
                 if resp.get('success') is True:
                     retry = 0
-                    order_result(True, f'Sold {order_args["amount"]} tokens at ${order_args["price"]}')
+                    usdc_received = order_args['amount'] * order_args['price']
+                    order_result(True, f'Sold {order_args["amount"]:.2f} tokens at ${order_args["price"]} (received ${usdc_received:.2f})')
                     remaining -= order_args['amount']
+                    # Note: Balance will be updated on next check, so we don't track it here
                 else:
                     _warn_if_clob_placeholder(resp)
                     error_message = extract_order_error(resp)

@@ -18,6 +18,7 @@ import json
 import secrets
 import time
 import httpx
+from decimal import Decimal, ROUND_DOWN
 from typing import Optional, Dict, Any, List, Tuple
 from web3 import Web3
 from eth_account import Account
@@ -437,6 +438,13 @@ class ClobClient:
                 raise ValueError(f"amount must be positive, got {amount_val}")
             if price_val <= 0 or price_val >= 1:
                 raise ValueError(f"price must be between 0 and 1 (exclusive) for prediction markets, got {price_val}")
+            if price_val < 0.000001:  # Prevent division by very small numbers that could cause overflow
+                raise ValueError(f"price too small, got {price_val}. Minimum price is 0.000001")
+            
+            # Additional validation for SELL orders: ensure amount is reasonable
+            # For SELL orders, amount is token quantity, which should be at least 1 token
+            if side == SELL and amount_val < 1.0:
+                raise ValueError(f"For SELL orders, amount (token quantity) must be at least 1.0, got {amount_val}")
             
             # Convert side to constant
             side = BUY if side_str == 'BUY' else SELL
@@ -458,17 +466,46 @@ class ClobClient:
             # For BUY orders:
             # - takerAmount: USDC amount we're paying (in smallest units, 6 decimals)
             # - makerAmount: Token amount we're receiving (in smallest units, 6 decimals)
+            # For SELL orders:
+            # - makerAmount: Token amount we're selling (in smallest units, 6 decimals)
+            # - takerAmount: USDC amount we're receiving (in smallest units, 6 decimals)
             # For prediction markets: amount is USDC, price is token price (0-1)
-            # Token amount = USDC amount / price
             USDC_DECIMALS = 6
             TOKEN_DECIMALS = 6
             
-            taker_amount_usdc = amount_val  # USDC amount we're paying
-            maker_amount_tokens = amount_val / price_val  # Token amount we're receiving
+            # Use Decimal for precise calculations to avoid floating point errors
+            amount_decimal = Decimal(str(amount_val))
+            price_decimal = Decimal(str(price_val))
             
-            # Convert to smallest units (multiply by 10^decimals)
-            taker_amount_str = str(int(taker_amount_usdc * (10 ** USDC_DECIMALS)))
-            maker_amount_str = str(int(maker_amount_tokens * (10 ** TOKEN_DECIMALS)))
+            if side == BUY:
+                # BUY order: we pay USDC, receive tokens
+                taker_amount_usdc = amount_decimal  # USDC amount we're paying
+                maker_amount_tokens = amount_decimal / price_decimal  # Token amount we're receiving
+            else:
+                # SELL order: we pay tokens, receive USDC
+                # For SELL, amount is token quantity, price is still token price
+                # USDC received = token_amount * price
+                maker_amount_tokens = amount_decimal  # Token amount we're selling
+                taker_amount_usdc = amount_decimal * price_decimal  # USDC amount we're receiving
+            
+            # Convert to smallest units (multiply by 10^decimals) and round down to avoid overflow
+            # Use Decimal arithmetic to avoid precision issues
+            taker_amount_int = int((taker_amount_usdc * Decimal(10 ** USDC_DECIMALS)).quantize(Decimal('1'), rounding=ROUND_DOWN))
+            maker_amount_int = int((maker_amount_tokens * Decimal(10 ** TOKEN_DECIMALS)).quantize(Decimal('1'), rounding=ROUND_DOWN))
+            
+            # Validate amounts are positive and within reasonable bounds
+            if taker_amount_int <= 0:
+                raise ValueError(f"Calculated takerAmount must be positive, got {taker_amount_int}")
+            if maker_amount_int <= 0:
+                raise ValueError(f"Calculated makerAmount must be positive, got {maker_amount_int}")
+            
+            # Check for potential overflow (uint256 max is 2^256 - 1, but we use smaller limits for safety)
+            MAX_UINT256 = Decimal(2**256 - 1)
+            if taker_amount_int > MAX_UINT256 or maker_amount_int > MAX_UINT256:
+                raise ValueError(f"Order amounts too large: takerAmount={taker_amount_int}, makerAmount={maker_amount_int}")
+            
+            taker_amount_str = str(taker_amount_int)
+            maker_amount_str = str(maker_amount_int)
             
             # Get private key for signing (py-order-utils Signer expects 0x prefix)
             private_key = self._get_private_key()
@@ -499,25 +536,39 @@ class ClobClient:
             signed_order = builder.build_signed_order(order_data)
             
             # Convert to dictionary; CLOB API expects camelCase keys
+            # py-order-utils SignedOrder.dict() returns a dict with all order fields + signature
+            # The dict already has camelCase keys, so we may not need conversion, but keep it for safety
             if hasattr(signed_order, 'dict'):
                 raw = signed_order.dict()
-            elif hasattr(signed_order, '__dict__'):
-                raw = dict(signed_order.__dict__)
+            elif hasattr(signed_order, 'order') and hasattr(signed_order, 'signature'):
+                # Fallback: extract order dict and add signature
+                order_dict = signed_order.order if isinstance(signed_order.order, dict) else signed_order.order.__dict__
+                raw = dict(order_dict) if isinstance(order_dict, dict) else order_dict
+                raw['signature'] = signed_order.signature
             else:
+                # This should not happen with py-order-utils, but handle gracefully
+                error('Warning: Unexpected signed_order format, using fallback construction')
                 raw = {
-                    'tokenID': token_id,
-                    'price': price_str,
-                    'size': size_str,
+                    'tokenId': token_id,
+                    'makerAmount': maker_amount_str,
+                    'takerAmount': taker_amount_str,
                     'side': side,  # BUY=0, SELL=1
-                    'expiration': expiration,
-                    'nonce': order_nonce,
+                    'expiration': str(expiration),
+                    'nonce': str(order_nonce),
                     'maker': maker_address,
+                    'taker': '0x0000000000000000000000000000000000000000',
                     'signer': signer_address,
-                    'salt': salt,
-                    'feeRateBps': fee_rate_bps,
+                    'feeRateBps': str(fee_rate_bps),
                     'signatureType': self.signature_type_int,
                     'signature': getattr(signed_order, 'signature', '')
                 }
+            
+            # Ensure signature is present (should always be present from py-order-utils)
+            if 'signature' not in raw or not raw.get('signature'):
+                error('Warning: Missing signature in signed order')
+                raw['signature'] = getattr(signed_order, 'signature', '')
+            
+            # Convert to camelCase (py-order-utils already uses camelCase, but ensure consistency)
             return _order_dict_to_camel(raw)
                 
         except ImportError as e:
