@@ -441,13 +441,13 @@ class ClobClient:
             if price_val < 0.000001:  # Prevent division by very small numbers that could cause overflow
                 raise ValueError(f"price too small, got {price_val}. Minimum price is 0.000001")
             
+            # Convert side to constant
+            side = BUY if side_str == 'BUY' else SELL
+            
             # Additional validation for SELL orders: ensure amount is reasonable
             # For SELL orders, amount is token quantity, which should be at least 1 token
             if side == SELL and amount_val < 1.0:
                 raise ValueError(f"For SELL orders, amount (token quantity) must be at least 1.0, got {amount_val}")
-            
-            # Convert side to constant
-            side = BUY if side_str == 'BUY' else SELL
             
             # Get addresses in checksum format (must be set by client initialization)
             maker_raw = self.funder or self.eoa_address or (getattr(self.wallet, 'address', None) if self.wallet else None)
