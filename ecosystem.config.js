@@ -3,9 +3,9 @@ module.exports = {
     {
       name: "polymarket-bot",
       cwd: "/root/polymarket-trading-bot-python",
-      script: "src/main.py",
-      interpreter: "/root/polymarket-trading-bot-python/venv/bin/python",
-      args: "",
+      script: "/root/polymarket-trading-bot-python/venv/bin/python",
+      interpreter: "none",
+      args: "-m src.main",
       autorestart: true,
       watch: false,
       instances: 1,
