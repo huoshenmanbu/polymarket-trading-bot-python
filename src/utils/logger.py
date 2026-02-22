@@ -111,7 +111,15 @@ def trade(trader_address: str, action: str, details: dict) -> None:
     if details.get('transactionHash'):
         tx_url = f'https://polygonscan.com/tx/{details["transactionHash"]}'
         print(f'TX:     {Fore.BLUE}{tx_url}{Style.RESET_ALL}')
-    
+    if details.get('timestamp'):
+        ts = details['timestamp']
+        if ts > 1e12:
+            ts = ts / 1000.0
+        try:
+            ts_str = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S UTC')
+            print(f'Trade time (API): {Style.DIM}{ts_str}{Style.RESET_ALL}')
+        except (OSError, ValueError):
+            pass
     print(f'{Fore.MAGENTA}{"-" * 70}{Style.RESET_ALL}\n')
     
     # Log to file

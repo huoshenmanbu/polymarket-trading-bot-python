@@ -5,6 +5,7 @@ Uses the CLOB client (create_clob_client.ClobClient) to create and submit orders
 The real implementation lives in src/utils/create_clob_client.py and src/utils/clob_signing.py.
 Before production use, audit the signing and order flow per SECURITY.md.
 """
+import asyncio
 from typing import Optional, Dict, Any
 from ..config.env import ENV
 from ..models.user_history import get_user_activity_collection
@@ -272,7 +273,8 @@ async def post_order(
         retry = 0
         abort_due_to_funds = False
         total_bought_tokens = 0  # Track total tokens bought for this trade
-        
+        empty_asks_retried = False  # Retry once after short delay when book is empty (thin book / race)
+
         while remaining > 0 and retry < RETRY_LIMIT:
             try:
                 order_book = await clob_client.get_order_book(trade['asset'])
@@ -284,6 +286,11 @@ async def post_order(
                     collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
                     return
                 if not order_book.get('asks') or len(order_book['asks']) == 0:
+                    if not empty_asks_retried:
+                        info('No asks available in order book; retrying once in 1.5s (thin book / race)')
+                        empty_asks_retried = True
+                        await asyncio.sleep(1.5)
+                        continue
                     warning('No asks available in order book')
                     collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
                     break

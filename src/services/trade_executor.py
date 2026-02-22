@@ -11,7 +11,7 @@ from ..utils.fetch_data import fetch_data_async
 from ..utils.get_my_balance import get_my_balance_async
 from ..utils.post_order import post_order
 from ..utils.logger import (
-    success, info, warning, error, header, waiting, clear_line, separator, trade as log_trade, balance as log_balance
+    success, info, warning, error, header, waiting, clear_line, separator, trade as log_trade, balance as log_balance,
 )
 
 USER_ADDRESSES = ENV.USER_ADDRESSES
@@ -21,6 +21,10 @@ TRADE_AGGREGATION_WINDOW_SECONDS = ENV.TRADE_AGGREGATION_WINDOW_SECONDS
 TRADE_AGGREGATION_MIN_TOTAL_USD = ENV.TRADE_AGGREGATION_MIN_USD
 
 is_running = True
+
+# Unix timestamp (seconds) when trade_executor started. Trades with an API timestamp
+# before this value are ignored so that restarting the bot never re-executes old trades.
+_startup_time_sec: float = 0.0
 
 # Type definitions (using Dict for flexibility)
 TradeWithUser = Dict[str, Any]
@@ -45,8 +49,17 @@ def get_next_follow(follow_list: List[FollowEntry]) -> FollowEntry:
     return follow_list[idx]
 
 
+def _normalize_ts_to_sec(ts: Any) -> float:
+    """Convert API timestamp to seconds. Supports both seconds and milliseconds."""
+    if not ts:
+        return 0.0
+    ts_f = float(ts)
+    return ts_f / 1000.0 if ts_f > 1e12 else ts_f
+
+
 async def read_temp_trades() -> List[TradeWithUser]:
-    """Read unprocessed trades from database"""
+    """Read unprocessed trades from database, only returning trades that occurred
+    after the bot started (based on the API-provided timestamp)."""
     all_trades: List[TradeWithUser] = []
     
     for address in USER_ADDRESSES:
@@ -60,6 +73,10 @@ async def read_temp_trades() -> List[TradeWithUser]:
         }))
         
         for trade in trades:
+            # Skip trades that happened before this bot run started
+            trade_ts = _normalize_ts_to_sec(trade.get('timestamp'))
+            if trade_ts > 0 and trade_ts < _startup_time_sec:
+                continue
             trade['userAddress'] = address
             all_trades.append(trade)
 
@@ -169,6 +186,7 @@ async def do_trading(follow_list: List[FollowEntry], trades: List[TradeWithUser]
                 'slug': trade.get('slug'),
                 'eventSlug': trade.get('eventSlug'),
                 'transactionHash': trade.get('transactionHash'),
+                'timestamp': trade.get('timestamp'),
             }
         )
         try:
@@ -303,8 +321,11 @@ def stop_trade_executor() -> None:
 
 async def trade_executor(follow_list: List[FollowEntry]) -> None:
     """Main trade executor function. follow_list: [(proxy_wallet, clob_client), ...]."""
+    global _startup_time_sec
     if not follow_list:
         raise ValueError('trade_executor requires at least one follow wallet')
+    _startup_time_sec = time.time()
+    info(f'Startup time recorded: only trades with API timestamp >= now will be executed')
     success(f'Trade executor ready for {len(USER_ADDRESSES)} trader(s), {len(follow_list)} follow wallet(s)')
     if TRADE_AGGREGATION_ENABLED:
         info(
