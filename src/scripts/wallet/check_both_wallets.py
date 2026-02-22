@@ -4,7 +4,6 @@ Check both wallet addresses for comparison
 """
 import sys
 from pathlib import Path
-from datetime import datetime
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent.parent
@@ -15,6 +14,7 @@ import asyncio
 from src.config.env import ENV
 from src.utils.fetch_data import fetch_data_async
 from src.utils.get_my_balance import get_my_balance_async
+from src.utils.logger import format_ts_beijing
 from colorama import init, Fore, Style
 
 init(autoreset=True)
@@ -117,9 +117,9 @@ async def check_both_wallets():
             # Last 5 trades for comparison
             print('\n   Last 5 trades:')
             for idx, trade in enumerate(addr2_activities[:5], 1):
-                date = datetime.fromtimestamp(trade.get('timestamp', 0))
+                ts_str = format_ts_beijing(trade.get('timestamp', 0))
                 print(f'      {idx}. {trade.get("side", "UNKNOWN")} - {trade.get("title", "Unknown")}')
-                print(f'         ${trade.get("usdcSize", 0):.2f} @ {date.strftime("%Y-%m-%d %H:%M:%S")}')
+                print(f'         ${trade.get("usdcSize", 0):.2f} @ {ts_str}')
                 tx_hash = trade.get('transactionHash', '')
                 if tx_hash:
                     print(f'         TX: {tx_hash[:10]}...{tx_hash[-6:]}')

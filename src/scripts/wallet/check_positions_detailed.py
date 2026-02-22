@@ -56,7 +56,8 @@ async def check_positions():
         percent_pnl = pos.get('percentPnl', 0) or 0
         print(f'PnL: ${cash_pnl:.2f} ({percent_pnl:.2f}%)')
         if pos.get('slug'):
-            print(f'URL: https://polymarket.com/event/{pos.get("slug")}')
+            s = pos.get('slug')
+            print(f'URL: https://polymarket.com/event/{s}/{s}')
     
     print(f'\n{"─" * 48}')
     print(f'{Fore.CYAN}TOTAL CURRENT VALUE: ${total_value:.2f}{Style.RESET_ALL}')

@@ -358,12 +358,9 @@ class ClobClient:
             raise ValueError("API credentials not available. Call create_or_derive_api_key() first.")
         
         timestamp = str(get_timestamp())
-        # L2 POLY_ADDRESS: use funder for proxy wallets (type 1/2), signer for EOA (type 0)
-        # API credentials are associated with the funder (Polymarket profile) for proxy types
-        if self.signature_type_int in (1, 2) and self.funder:
-            poly_address = Web3.to_checksum_address(self.funder)
-        else:
-            poly_address = self._get_signer_address()
+        # L2 POLY_ADDRESS must be the signer address (EOA that created the API key), per official py-clob-client.
+        # Using funder (proxy) here causes "Unauthorized/Invalid api key".
+        poly_address = self._get_signer_address()
         
         # Create HMAC signature
         signature = sign_hmac_l2(

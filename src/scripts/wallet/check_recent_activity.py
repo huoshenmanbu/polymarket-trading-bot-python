@@ -14,6 +14,7 @@ if str(project_root) not in sys.path:
 import asyncio
 from src.config.env import ENV
 from src.utils.fetch_data import fetch_data_async
+from src.utils.logger import format_ts_beijing
 from colorama import init, Fore, Style
 
 init(autoreset=True)
@@ -54,14 +55,14 @@ async def check_recent_activity():
     total_spent = 0
     
     for i, trade in enumerate(trades_after_redemption, 1):
-        date = datetime.fromtimestamp(trade.get('timestamp', 0))
+        ts_str = format_ts_beijing(trade.get('timestamp', 0))
         value = trade.get('usdcSize', 0)
         total_spent += value
         
         print(f'{i}. {Fore.GREEN}BOUGHT:{Style.RESET_ALL} {trade.get("title") or trade.get("market") or "Unknown"}')
         print(f'   Spent: ${value:.2f}')
         print(f'   Size: {trade.get("size", 0):.2f} tokens @ ${trade.get("price", 0):.4f}')
-        print(f'   Date: {date.strftime("%Y-%m-%d %H:%M:%S")}')
+        print(f'   Date: {ts_str}')
         tx_hash = trade.get('transactionHash', '')
         if tx_hash:
             print(f'   TX: https://polygonscan.com/tx/{tx_hash[:20]}...\n')
@@ -84,13 +85,13 @@ async def check_recent_activity():
     
     total_sold = 0
     for i, trade in enumerate(recent_sells, 1):
-        date = datetime.fromtimestamp(trade.get('timestamp', 0))
+        ts_str = format_ts_beijing(trade.get('timestamp', 0))
         value = trade.get('usdcSize', 0)
         total_sold += value
         
         print(f'{i}. {Fore.RED}SOLD:{Style.RESET_ALL} {trade.get("title") or trade.get("market") or "Unknown"}')
         print(f'   Received: ${value:.2f}')
-        print(f'   Date: {date.strftime("%Y-%m-%d %H:%M:%S")}\n')
+        print(f'   Date: {ts_str}\n')
     
     print('=' * 63)
     print(f'{Fore.CYAN}Sold in recent trades: ${total_sold:.2f}{Style.RESET_ALL}')

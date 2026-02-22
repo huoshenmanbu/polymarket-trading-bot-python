@@ -14,6 +14,7 @@ import asyncio
 from src.config.env import ENV
 from src.utils.fetch_data import fetch_data_async
 from src.utils.get_my_balance import get_my_balance_async
+from src.utils.logger import format_ts_beijing
 from colorama import init, Fore, Style
 
 init(autoreset=True)
@@ -74,7 +75,8 @@ async def check_my_stats():
                 print(f'      P&L: ${cash_pnl:.2f} ({pnl:.2f}%)')
                 print(f'      Current price: ${pos.get("curPrice", 0):.3f}')
                 if pos.get('slug'):
-                    print(f'      https://polymarket.com/event/{pos.get("slug")}')
+                    s = pos.get('slug')
+                    print(f'      https://polymarket.com/event/{s}/{s}')
                 print('')
         else:
             print(f'   {Fore.YELLOW}No open positions{Style.RESET_ALL}\n')
@@ -102,12 +104,11 @@ async def check_my_stats():
             # Recent trades
             print('   Recent trades (last 5):\n')
             for idx, trade in enumerate(activities[:5], 1):
-                from datetime import datetime
-                date = datetime.fromtimestamp(trade.get('timestamp', 0))
+                ts_str = format_ts_beijing(trade.get('timestamp', 0), '%Y-%m-%d %H:%M')
                 side = trade.get('side', 'UNKNOWN')
                 side_color = Fore.GREEN if side == 'BUY' else Fore.RED
                 print(f'   {idx}. {side_color}{side}{Style.RESET_ALL} - {trade.get("title", "Unknown")}')
-                print(f'      ${trade.get("usdcSize", 0):.2f} @ {date.strftime("%Y-%m-%d %H:%M")}\n')
+                print(f'      ${trade.get("usdcSize", 0):.2f} @ {ts_str}\n')
         else:
             print(f'   {Fore.YELLOW}No trading activity found{Style.RESET_ALL}\n')
         

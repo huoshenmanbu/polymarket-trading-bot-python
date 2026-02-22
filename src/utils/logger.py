@@ -1,11 +1,36 @@
 """
-Logger utility with colored output and file logging
+Logger utility with colored output and file logging.
+All log timestamps use Beijing time (UTC+8).
 """
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional, Any
+
+# Beijing timezone (UTC+8)
+BEIJING_TZ = timezone(timedelta(hours=8))
+BEIJING_DATETIME_FMT = '%Y-%m-%d %H:%M:%S'
+BEIJING_TIME_ONLY_FMT = '%H:%M:%S'
+BEIJING_ISO_FMT = '%Y-%m-%d %H:%M:%S'  # no %z; we append " CST" where needed
+
+
+def now_beijing() -> datetime:
+    """Current time in Beijing (UTC+8)."""
+    return datetime.now(BEIJING_TZ)
+
+
+def format_ts_beijing(ts: float, fmt: str = BEIJING_DATETIME_FMT) -> str:
+    """Format Unix timestamp (seconds or ms) as Beijing time string."""
+    if not ts:
+        return ''
+    if ts > 1e12:
+        ts = ts / 1000.0
+    try:
+        dt = datetime.fromtimestamp(ts, tz=BEIJING_TZ)
+        return dt.strftime(fmt)
+    except (OSError, ValueError):
+        return ''
 
 try:
     from colorama import init, Fore, Style
@@ -27,17 +52,17 @@ logs_dir = LOGS_DIR
 
 
 def get_log_file_name() -> Path:
-    """Get log file name for today"""
-    date = datetime.now().strftime('%Y-%m-%d')
+    """Get log file name for today (Beijing date)."""
+    date = now_beijing().strftime('%Y-%m-%d')
     return logs_dir / f'bot-{date}.log'
 
 
 def write_to_file(message: str) -> None:
-    """Write message to log file"""
+    """Write message to log file (timestamp in Beijing time)."""
     try:
         log_file = get_log_file_name()
-        timestamp = datetime.now().isoformat()
-        log_entry = f'[{timestamp}] {message}\n'
+        timestamp = now_beijing().strftime(BEIJING_DATETIME_FMT)
+        log_entry = f'[{timestamp} CST] {message}\n'
         with open(log_file, 'a', encoding='utf-8') as f:
             f.write(log_entry)
     except Exception:
@@ -106,20 +131,16 @@ def trade(trader_address: str, action: str, details: dict) -> None:
         print(f'Price:  {Fore.CYAN}${details["price"]:.4f}{Style.RESET_ALL}')
     if details.get('eventSlug') or details.get('slug'):
         slug = details.get('eventSlug') or details.get('slug')
-        market_url = f'https://polymarket.com/event/{slug}'
+        # Match official site URL format: /event/{slug}/{slug} (e.g. .../xrp-updown-5m-1771749600/xrp-updown-5m-1771749600)
+        market_url = f'https://polymarket.com/event/{slug}/{slug}'
         print(f'Market: {Fore.BLUE}{market_url}{Style.RESET_ALL}')
     if details.get('transactionHash'):
         tx_url = f'https://polygonscan.com/tx/{details["transactionHash"]}'
         print(f'TX:     {Fore.BLUE}{tx_url}{Style.RESET_ALL}')
     if details.get('timestamp'):
-        ts = details['timestamp']
-        if ts > 1e12:
-            ts = ts / 1000.0
-        try:
-            ts_str = datetime.utcfromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S UTC')
-            print(f'Trade time (API): {Style.DIM}{ts_str}{Style.RESET_ALL}')
-        except (OSError, ValueError):
-            pass
+        ts_str = format_ts_beijing(details['timestamp'])
+        if ts_str:
+            print(f'Trade time (API): {Style.DIM}{ts_str} CST{Style.RESET_ALL}')
     print(f'{Fore.MAGENTA}{"-" * 70}{Style.RESET_ALL}\n')
     
     # Log to file
@@ -155,8 +176,8 @@ def order_result(success_flag: bool, message: str) -> None:
 
 
 def monitoring(trader_count: int) -> None:
-    """Print monitoring status"""
-    timestamp = datetime.now().strftime('%H:%M:%S')
+    """Print monitoring status (time in Beijing)."""
+    timestamp = now_beijing().strftime(BEIJING_TIME_ONLY_FMT)
     print(f'{Style.DIM}[{timestamp}]{Style.RESET_ALL} {Fore.CYAN}[INFO]{Style.RESET_ALL} Monitoring {Fore.YELLOW}{trader_count}{Style.RESET_ALL} trader(s)')
 
 
@@ -207,8 +228,8 @@ def separator() -> None:
 
 
 def waiting(trader_count: int, extra_info: Optional[str] = None) -> None:
-    """Print waiting message (not written to file to avoid log spam)"""
-    timestamp = datetime.now().strftime('%H:%M:%S')
+    """Print waiting message (time in Beijing; not written to file to avoid log spam)."""
+    timestamp = now_beijing().strftime(BEIJING_TIME_ONLY_FMT)
     message = f'Waiting for trades from {trader_count} trader(s)'
     if extra_info:
         message += f' ({extra_info})'

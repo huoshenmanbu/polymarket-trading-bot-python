@@ -3,6 +3,8 @@ Trade executor service - executes trades based on monitored activity
 """
 import asyncio
 import time
+import urllib.parse
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
 from ..config.env import ENV
 from ..models.user_history import get_user_activity_collection
@@ -19,6 +21,8 @@ RETRY_LIMIT = ENV.RETRY_LIMIT
 TRADE_AGGREGATION_ENABLED = ENV.TRADE_AGGREGATION_ENABLED
 TRADE_AGGREGATION_WINDOW_SECONDS = ENV.TRADE_AGGREGATION_WINDOW_SECONDS
 TRADE_AGGREGATION_MIN_TOTAL_USD = ENV.TRADE_AGGREGATION_MIN_USD
+
+GAMMA_EVENTS_BASE = 'https://gamma-api.polymarket.com/events/slug'
 
 is_running = True
 
@@ -83,6 +87,33 @@ async def read_temp_trades() -> List[TradeWithUser]:
     # Sort by timestamp so round-robin follows time order; put missing timestamp at end
     all_trades.sort(key=lambda t: (t.get('timestamp') is None, t.get('timestamp') or 0))
     return all_trades
+
+
+async def is_market_ended(slug: str) -> Optional[bool]:
+    """
+    Fetch event by slug from Gamma API; return True if endDate is in the past,
+    False if still open, None if unknown (no slug, API error, or no endDate).
+    Used to skip trades that are likely settlement/redemption (on-chain after market close).
+    """
+    if not slug or not str(slug).strip():
+        return None
+    try:
+        url = f'{GAMMA_EVENTS_BASE}/{urllib.parse.quote(str(slug).strip())}'
+        data = await fetch_data_async(url)
+        if not data or not isinstance(data, dict):
+            return None
+        end_date_str = data.get('endDate')
+        if not end_date_str:
+            return None
+        # Parse ISO format e.g. 2026-02-22T08:45:00.000Z
+        end_date_str = end_date_str.replace('Z', '+00:00')
+        end_dt = datetime.fromisoformat(end_date_str)
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        end_ts = end_dt.timestamp()
+        return end_ts < time.time()
+    except Exception:
+        return None
 
 
 def get_aggregation_key(trade: TradeWithUser) -> str:
@@ -166,8 +197,6 @@ def get_ready_aggregated_trades() -> List[AggregatedTrade]:
 async def do_trading(follow_list: List[FollowEntry], trades: List[TradeWithUser]) -> None:
     """Execute trades. Each trade uses the next follow wallet (round-robin). Failure does not retry with another wallet."""
     for trade in trades:
-        proxy_wallet, clob_client = get_next_follow(follow_list)
-
         # Mark trade as being processed immediately to prevent duplicate processing
         collection = get_user_activity_collection(trade['userAddress'])
         collection.update_one(
@@ -189,6 +218,18 @@ async def do_trading(follow_list: List[FollowEntry], trades: List[TradeWithUser]
                 'timestamp': trade.get('timestamp'),
             }
         )
+        # Skip BUY if market has already ended (trade may be settlement/redemption, not copyable)
+        # Do this BEFORE get_next_follow so we don't waste a round-robin slot on skipped trades.
+        if trade.get('side') == 'BUY':
+            slug = trade.get('eventSlug') or trade.get('slug') or ''
+            ended = await is_market_ended(slug)
+            if ended is True:
+                info('Market already ended (trade likely settlement/redemption), skipping')
+                collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
+                separator()
+                continue
+
+        proxy_wallet, clob_client = get_next_follow(follow_list)
         try:
             my_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={proxy_wallet}')
             user_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={trade["userAddress"]}')
@@ -237,8 +278,6 @@ async def do_trading(follow_list: List[FollowEntry], trades: List[TradeWithUser]
 async def do_aggregated_trading(follow_list: List[FollowEntry], aggregated_trades: List[AggregatedTrade]) -> None:
     """Execute aggregated trades. Each aggregated trade uses the next follow wallet (round-robin)."""
     for agg in aggregated_trades:
-        proxy_wallet, clob_client = get_next_follow(follow_list)
-
         header(f"AGGREGATED TRADE ({len(agg['trades'])} trades combined)")
         info(f"Market: {agg.get('slug') or agg.get('asset', 'unknown')}")
         info(f"Side: {agg.get('side', 'BUY')}")
@@ -252,6 +291,21 @@ async def do_aggregated_trading(follow_list: List[FollowEntry], aggregated_trade
                 {'_id': trade['_id']},
                 {'$set': {'botExcutedTime': 1}}
             )
+        # Skip BUY if market has already ended.
+        # Do this BEFORE get_next_follow so we don't waste a round-robin slot on skipped trades.
+        if agg.get('side') == 'BUY':
+            first_trade = agg['trades'][0] if agg.get('trades') else {}
+            slug = agg.get('eventSlug') or agg.get('slug') or first_trade.get('eventSlug') or first_trade.get('slug') or ''
+            ended = await is_market_ended(slug)
+            if ended is True:
+                info('Market already ended (trades likely settlement/redemption), skipping aggregation')
+                for trade in agg['trades']:
+                    col = get_user_activity_collection(trade['userAddress'])
+                    col.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
+                separator()
+                continue
+
+        proxy_wallet, clob_client = get_next_follow(follow_list)
         try:
             my_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={proxy_wallet}')
             user_positions_data = await fetch_data_async(f'https://data-api.polymarket.com/positions?user={agg["userAddress"]}')

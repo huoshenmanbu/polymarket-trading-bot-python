@@ -4,7 +4,6 @@ Check proxy wallet and main wallet activity
 """
 import sys
 from pathlib import Path
-from datetime import datetime
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent.parent
@@ -16,6 +15,7 @@ from web3 import Web3
 from eth_account import Account
 from src.config.env import ENV
 from src.utils.fetch_data import fetch_data_async
+from src.utils.logger import format_ts_beijing
 from colorama import init, Fore, Style
 
 init(autoreset=True)
@@ -62,9 +62,9 @@ async def check_proxy_wallet():
             # Show last 3 trades
             print('   Last 3 trades:')
             for idx, trade in enumerate(eoa_activities[:3], 1):
-                date = datetime.fromtimestamp(trade.get('timestamp', 0))
+                ts_str = format_ts_beijing(trade.get('timestamp', 0), '%Y-%m-%d')
                 print(f'      {idx}. {trade.get("side", "UNKNOWN")} - {trade.get("title", "Unknown")}')
-                print(f'         ${trade.get("usdcSize", 0):.2f} @ {date.strftime("%Y-%m-%d")}')
+                print(f'         ${trade.get("usdcSize", 0):.2f} @ {ts_str}')
             print('')
         else:
             print(f'   {Fore.YELLOW}No trades found on main wallet{Style.RESET_ALL}\n')
@@ -97,9 +97,9 @@ async def check_proxy_wallet():
             # Show last 3 trades
             print('   Last 3 trades:')
             for idx, trade in enumerate(proxy_activities[:3], 1):
-                date = datetime.fromtimestamp(trade.get('timestamp', 0))
+                ts_str = format_ts_beijing(trade.get('timestamp', 0), '%Y-%m-%d')
                 print(f'      {idx}. {trade.get("side", "UNKNOWN")} - {trade.get("title", "Unknown")}')
-                print(f'         ${trade.get("usdcSize", 0):.2f} @ {date.strftime("%Y-%m-%d")}')
+                print(f'         ${trade.get("usdcSize", 0):.2f} @ {ts_str}')
             print('')
         else:
             print(f'   {Fore.YELLOW}No trades found on proxy wallet{Style.RESET_ALL}\n')
