@@ -372,6 +372,8 @@ class ENV:
     # Trade aggregation settings
     TRADE_AGGREGATION_ENABLED: bool = os.getenv('TRADE_AGGREGATION_ENABLED', '').lower() == 'true'
     TRADE_AGGREGATION_WINDOW_SECONDS: int = int(os.getenv('TRADE_AGGREGATION_WINDOW_SECONDS', '300'))  # 5 minutes default
+    TRADE_AGGREGATION_MIN_USD: float = float(os.getenv('TRADE_AGGREGATION_MIN_USD', '1.0'))
+    PREVIEW_MODE: bool = os.getenv('PREVIEW_MODE', '').lower() == 'true'
     MONGO_URI: str = os.getenv('MONGO_URI', '')
     RPC_URL: str = os.getenv('RPC_URL', '')
     USDC_CONTRACT_ADDRESS: str = os.getenv('USDC_CONTRACT_ADDRESS', '')

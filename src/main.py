@@ -73,6 +73,8 @@ async def main():
         
         await connect_db()
         startup(ENV.USER_ADDRESSES, ENV.PROXY_WALLETS)
+        if ENV.PREVIEW_MODE:
+            warning('PREVIEW MODE ENABLED - trades will be simulated, no real orders will be submitted')
         
         # Perform initial system status check
         info('Performing initial system status check...')

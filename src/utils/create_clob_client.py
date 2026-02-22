@@ -384,11 +384,22 @@ class ClobClient:
         }
     
     async def get_order_book(self, token_id: str) -> Dict[str, Any]:
-        """Get order book for a token"""
+        """
+        Get order book for a token.
+        On 404 (no orderbook for this token), returns empty bids/asks instead of raising,
+        so callers can skip with a clear message (e.g. market expired or delisted).
+        """
         url = f'{self.host}/book?token_id={token_id}'
         timeout = httpx.Timeout(ENV.REQUEST_TIMEOUT_MS / 1000.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(url)
+            if response.status_code == 404:
+                # No orderbook for this token (market may be expired, resolved, or delisted)
+                return {
+                    'bids': [],
+                    'asks': [],
+                    '_orderbook_not_found': True,
+                }
             response.raise_for_status()
             return response.json()
     

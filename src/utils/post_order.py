@@ -13,13 +13,29 @@ from ..config.copy_strategy import calculate_order_size, get_trade_multiplier
 
 RETRY_LIMIT = ENV.RETRY_LIMIT
 COPY_STRATEGY_CONFIG = ENV.COPY_STRATEGY_CONFIG
+PREVIEW_MODE = ENV.PREVIEW_MODE
 
 # One-time warning if the CLOB response indicates "not implemented" (e.g. stub client)
 _CLOB_PLACEHOLDER_WARNED = False
 
-# Polymarket minimum order sizes
-MIN_ORDER_SIZE_USD = 1.0  # Minimum order size in USD for BUY orders
-MIN_ORDER_SIZE_TOKENS = 1.0  # Minimum order size in tokens for SELL/MERGE orders
+# Polymarket minimum order sizes (BUY uses COPY_STRATEGY_CONFIG.min_order_size_usd from env)
+MIN_ORDER_SIZE_TOKENS = 1.0  # Minimum order size in tokens for SELL/MERGE orders (fallback when book has no min)
+
+
+def _parse_book_min_order_size(order_book: Dict[str, Any]) -> Optional[float]:
+    """
+    Parse min_order_size from Polymarket orderbook response.
+    BUY: unit is USD; SELL/MERGE: unit is tokens (shares).
+    Returns None if missing or invalid so callers can fall back to config-only.
+    """
+    val = order_book.get('min_order_size') if 'min_order_size' in order_book else order_book.get('minOrderSize')
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
 
 
 def extract_order_error(response: Any) -> Optional[str]:
@@ -84,6 +100,8 @@ async def post_order(
     user_address: str
 ):
     """Post order to Polymarket"""
+    if PREVIEW_MODE:
+        info('[PREVIEW MODE] Simulating trade - no real orders will be submitted')
     collection = get_user_activity_collection(user_address)
     
     if condition == 'merge':
@@ -103,6 +121,7 @@ async def post_order(
         
         retry = 0
         abort_due_to_funds = False
+        below_market_min = False  # set True when we skip due to market minimum, not retry exhaustion
         
         while remaining > 0 and retry < RETRY_LIMIT:
             # Check minimum token size before each attempt
@@ -113,9 +132,27 @@ async def post_order(
 
             try:
                 order_book = await clob_client.get_order_book(trade['asset'])
+                if order_book.get('_orderbook_not_found'):
+                    warning(
+                        'Order book not found for this token (404). '
+                        'Market may be expired, resolved, or delisted - skipping.'
+                    )
+                    collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
+                    return
                 if not order_book.get('bids') or len(order_book['bids']) == 0:
                     warning('No bids available in order book')
-                    collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
+                    break
+                
+                book_min_tokens = _parse_book_min_order_size(order_book)
+                effective_min_tokens = max(MIN_ORDER_SIZE_TOKENS, book_min_tokens if book_min_tokens is not None else 0)
+                if book_min_tokens is not None and book_min_tokens > MIN_ORDER_SIZE_TOKENS:
+                    info(f'Market minimum order size {effective_min_tokens:.2f} tokens (above config {MIN_ORDER_SIZE_TOKENS})')
+
+                if remaining < effective_min_tokens:
+                    info(
+                        f'Remaining {remaining:.2f} tokens below market minimum ({effective_min_tokens:.2f}) - completing'
+                    )
+                    below_market_min = True
                     break
                 
                 max_price_bid = max(order_book['bids'], key=lambda x: float(x['price']))
@@ -151,6 +188,18 @@ async def post_order(
                     'price': bid_price,
                 }
                 
+                if order_args['amount'] < effective_min_tokens:
+                    info(
+                        f'Best bid size ({order_args["amount"]:.2f} tokens) below market minimum ({effective_min_tokens:.2f}) - completing'
+                    )
+                    below_market_min = True
+                    break
+                
+                if PREVIEW_MODE:
+                    info(f'[PREVIEW] Would SELL {order_args["amount"]} tokens @ ${order_args["price"]} (not submitted)')
+                    remaining -= order_args['amount']
+                    continue
+
                 signed_order = await clob_client.create_market_order(order_args)
                 resp = await clob_client.post_order(signed_order, 'FOK')
                 
@@ -181,7 +230,7 @@ async def post_order(
             )
             return
         
-        if retry >= RETRY_LIMIT:
+        if not below_market_min and retry >= RETRY_LIMIT:
             collection.update_one(
                 {'_id': trade['_id']},
                 {'$set': {'bot': True, 'botExcutedTime': retry}}
@@ -227,18 +276,30 @@ async def post_order(
         while remaining > 0 and retry < RETRY_LIMIT:
             try:
                 order_book = await clob_client.get_order_book(trade['asset'])
+                if order_book.get('_orderbook_not_found'):
+                    warning(
+                        'Order book not found for this token (404). '
+                        'Market may be expired, resolved, or delisted - skipping.'
+                    )
+                    collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
+                    return
                 if not order_book.get('asks') or len(order_book['asks']) == 0:
                     warning('No asks available in order book')
                     collection.update_one({'_id': trade['_id']}, {'$set': {'bot': True}})
                     break
                 
+                book_min_usd = _parse_book_min_order_size(order_book)
+                config_min = COPY_STRATEGY_CONFIG.min_order_size_usd
+                min_usd = max(config_min, book_min_usd if book_min_usd is not None else 0)
+                if book_min_usd is not None and book_min_usd > config_min:
+                    info(f'Market minimum order size ${book_min_usd:.2f} (using max of config ${config_min:.2f})')
+                
                 min_price_ask = min(order_book['asks'], key=lambda x: float(x['price']))
                 
                 info(f'Best ask: {min_price_ask["size"]} @ ${min_price_ask["price"]}')
                 
-                # Check if remaining amount is below minimum before creating order
-                if remaining < MIN_ORDER_SIZE_USD:
-                    info(f'Remaining amount (${remaining:.2f}) below minimum - completing trade')
+                if remaining < min_usd:
+                    info(f'Remaining amount (${remaining:.2f}) below minimum (${min_usd}) - completing trade')
                     collection.update_one(
                         {'_id': trade['_id']},
                         {'$set': {'bot': True, 'myBoughtSize': total_bought_tokens}}
@@ -248,9 +309,9 @@ async def post_order(
                 max_order_size = float(min_price_ask['size']) * float(min_price_ask['price'])
                 order_size = min(remaining, max_order_size)
                 
-                # Ensure minimum order size is 1 USDC
-                if order_size < MIN_ORDER_SIZE_USD:
-                    info(f'Order size (${order_size:.2f}) below minimum (${MIN_ORDER_SIZE_USD}) - completing trade')
+                # Ensure order size meets minimum (config and/or market min_order_size)
+                if order_size < min_usd:
+                    info(f'Order size (${order_size:.2f}) below minimum (${min_usd}) - completing trade')
                     collection.update_one(
                         {'_id': trade['_id']},
                         {'$set': {'bot': True, 'myBoughtSize': total_bought_tokens}}
@@ -271,7 +332,15 @@ async def post_order(
                 }
                 
                 info(f'Creating order: ${order_size:.2f} @ ${min_price_ask["price"]} (Balance: ${available_balance:.2f})')
-                
+
+                if PREVIEW_MODE:
+                    tokens_bought = order_args['amount'] / order_args['price']
+                    total_bought_tokens += tokens_bought
+                    info(f'[PREVIEW] Would BUY ${order_args["amount"]:.2f} @ ${order_args["price"]} ({tokens_bought:.2f} tokens) (not submitted)')
+                    remaining -= order_args['amount']
+                    available_balance -= order_args['amount']
+                    continue
+
                 signed_order = await clob_client.create_market_order(order_args)
                 resp = await clob_client.post_order(signed_order, 'FOK')
                 
